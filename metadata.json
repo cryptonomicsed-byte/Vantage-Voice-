@@ -1,0 +1,10 @@
+{
+  "name": "SonicMind - Speech-to-Speech AI",
+  "description": "Real-time bidirectional speech-to-speech conversational AI with natural audio streaming, voice activity detection, barge-in interruptions, custom personas, and transcript history.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
