@@ -203,6 +203,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   );
                 })}
               </div>
+
+              {/* Voice Output Toggle */}
+              <div className="pt-2">
+                <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700">
+                  <div>
+                    <h5 className="text-xs sm:text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                      Enable Spoken Voice Output
+                    </h5>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      When enabled, the AI speaks responses aloud. When disabled, the AI responds in text only.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={localSettings.enableVoiceOutput}
+                    onChange={(e) =>
+                      setLocalSettings((prev) => ({ ...prev, enableVoiceOutput: e.target.checked }))
+                    }
+                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 accent-indigo-600 cursor-pointer"
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -229,10 +251,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     },
                     {
                       id: 'hermes' as AgentFramework,
-                      title: 'Hermes (Nous Research)',
-                      desc: 'Autonomous reasoning engine with structured scratchpads & tool invocation loops.',
+                      title: 'NousResearch Hermes Agent',
+                      desc: 'Plugged via gh repo clone NousResearch/hermes-agent. Autonomous reasoning engine with XML <thought> scratchpads, memory vault integration & voice synthesis.',
                       icon: Brain,
                       color: 'text-emerald-500',
+                      repoTag: 'gh repo clone NousResearch/hermes-agent',
                     },
                     {
                       id: 'open_claw' as AgentFramework,
@@ -271,6 +294,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           {isSelected && <Check className="w-4 h-4 text-indigo-500" />}
                         </div>
                         <p className="text-xs text-zinc-500 dark:text-zinc-400">{fw.desc}</p>
+                        {fw.repoTag && (
+                          <div className="mt-2 inline-block px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-mono text-[10px]">
+                            {fw.repoTag}
+                          </div>
+                        )}
                       </button>
                     );
                   })}
@@ -282,6 +310,139 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                   Tool Capabilities & Automation
                 </h4>
+
+                <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700">
+                  <div>
+                    <h5 className="text-xs sm:text-sm font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                      Modern Standards & Meta-Tools Suite
+                    </h5>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      Enables Model Context Protocol (MCP) server integration, vector tool retrieval & search, and multi-agent sub-delegation.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={localSettings.enableModernMetaTools ?? true}
+                    onChange={(e) =>
+                      setLocalSettings((prev) => ({ ...prev, enableModernMetaTools: e.target.checked }))
+                    }
+                    className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 accent-purple-600 cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700">
+                  <div>
+                    <h5 className="text-xs sm:text-sm font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                      Domain-Specific & Custom Suite
+                    </h5>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      Enables Weather, Stock Tickers, Maps & Translate, Salesforce/CRM, Payment/Orders, IoT smart home, and Custom Logic.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={localSettings.enableDomainCustomTools ?? true}
+                    onChange={(e) =>
+                      setLocalSettings((prev) => ({ ...prev, enableDomainCustomTools: e.target.checked }))
+                    }
+                    className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 accent-amber-600 cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700">
+                  <div>
+                    <h5 className="text-xs sm:text-sm font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                      Development & Software Suite
+                    </h5>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      Enables GitHub code/repo search, SQL & Vector DB queries, generic HTTP API execution, and Cloud Deployment tools.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={localSettings.enableDevTools ?? true}
+                    onChange={(e) =>
+                      setLocalSettings((prev) => ({ ...prev, enableDevTools: e.target.checked }))
+                    }
+                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 accent-emerald-600 cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700">
+                  <div>
+                    <h5 className="text-xs sm:text-sm font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                      Communication & Productivity Suite
+                    </h5>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      Enables Gmail email send/read, Slack/Discord/Teams chat, Google/Outlook Calendar, Notion/Docs, and SMS alerts.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={localSettings.enableCommunicationTools ?? true}
+                    onChange={(e) =>
+                      setLocalSettings((prev) => ({ ...prev, enableCommunicationTools: e.target.checked }))
+                    }
+                    className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 accent-blue-600 cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700">
+                  <div>
+                    <h5 className="text-xs sm:text-sm font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                      Browser & Computer Control Suite
+                    </h5>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      Enables Stagehand browser automation, OS virtual mouse/keyboard, and Screen OCR reader.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={localSettings.enableComputerControl ?? true}
+                    onChange={(e) =>
+                      setLocalSettings((prev) => ({ ...prev, enableComputerControl: e.target.checked }))
+                    }
+                    className="w-4 h-4 rounded text-rose-600 focus:ring-rose-500 accent-rose-600 cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700">
+                  <div>
+                    <h5 className="text-xs sm:text-sm font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                      Code & Computation Tools Suite
+                    </h5>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      Enables Python/JS Sandbox, Terminal execution, Math calculator, Pandas/SQL, and Workspace Filesystem.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={localSettings.enableCodeInterpreter ?? true}
+                    onChange={(e) =>
+                      setLocalSettings((prev) => ({ ...prev, enableCodeInterpreter: e.target.checked }))
+                    }
+                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 accent-emerald-600 cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700">
+                  <div>
+                    <h5 className="text-xs sm:text-sm font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                      Information & Research Tools Suite
+                    </h5>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      Enables Web Search, Page Scraper, News Feeds, Wikipedia, arXiv, and Multimodal Vision tools.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={localSettings.enableResearchTools ?? true}
+                    onChange={(e) =>
+                      setLocalSettings((prev) => ({ ...prev, enableResearchTools: e.target.checked }))
+                    }
+                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 accent-indigo-600 cursor-pointer"
+                  />
+                </div>
 
                 <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700">
                   <div>
@@ -462,6 +623,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* TAB 4: VAD & Audio */}
           {activeTab === 'audio' && (
             <div className="space-y-5">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
+                  Audio Visualizer Display Style
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[
+                    { id: 'orb', label: 'Core Orb', desc: 'Glowing pulsing core' },
+                    { id: 'bars', label: 'Bar Equalizer', desc: '32-band spectrum' },
+                    { id: 'wave', label: 'Sine Wave', desc: 'Ocean ribbon waves' },
+                    { id: 'pulse', label: 'Radial Pulse', desc: 'Concentric rings' },
+                  ].map((styleItem) => {
+                    const isSelected = (localSettings.visualizerStyle || 'orb') === styleItem.id;
+                    return (
+                      <button
+                        key={styleItem.id}
+                        type="button"
+                        onClick={() =>
+                          setLocalSettings((prev) => ({
+                            ...prev,
+                            visualizerStyle: styleItem.id as any,
+                          }))
+                        }
+                        className={`p-2.5 rounded-2xl border text-xs text-left transition-all ${
+                          isSelected
+                            ? 'border-indigo-500 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-bold shadow-sm'
+                            : 'border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/50 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                        }`}
+                      >
+                        <div className="font-semibold">{styleItem.label}</div>
+                        <div className="text-[10px] opacity-70 font-normal mt-0.5">{styleItem.desc}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div>
                 <div className="flex justify-between text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
                   <span>AI Speech Playback Speed (Rate)</span>

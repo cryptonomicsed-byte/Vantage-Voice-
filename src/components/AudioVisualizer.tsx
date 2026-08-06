@@ -12,6 +12,7 @@ interface AudioVisualizerProps {
   isMuted?: boolean;
   onStartSession?: () => void;
   isConnected?: boolean;
+  visualizerStyle?: 'orb' | 'bars' | 'wave' | 'pulse';
 }
 
 export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
@@ -23,6 +24,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   isMuted = false,
   onStartSession,
   isConnected = false,
+  visualizerStyle = 'orb',
 }) => {
   const [isCaptured, setIsCaptured] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -133,93 +135,234 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
         activePeak = 0.08 + Math.sin(p) * 0.04;
       }
 
-      // 1. Draw outer ambient glowing aura (responding to Peak level for quick transients)
-      const auraGradient = ctx.createRadialGradient(
-        centerX,
-        centerY,
-        baseRadius * 0.2,
-        centerX,
-        centerY,
-        baseRadius * (1.8 + activePeak * 1.4)
-      );
-      auraGradient.addColorStop(0, `rgba(${primaryColor}, ${0.25 + activePeak * 0.35})`);
-      auraGradient.addColorStop(0.5, `rgba(${secondaryColor}, ${0.1 + activePeak * 0.2})`);
-      auraGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      if (visualizerStyle === 'bars') {
+        // --- BAR GRAPH SPECTRUM EQUALIZER ---
+        const numBars = 32;
+        const totalWidth = width * 0.8;
+        const barGap = 6;
+        const barWidth = (totalWidth - (numBars - 1) * barGap) / numBars;
+        const startX = (width - totalWidth) / 2;
 
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, baseRadius * (2.2 + activePeak * 1.4), 0, Math.PI * 2);
-      ctx.fillStyle = auraGradient;
-      ctx.fill();
+        for (let i = 0; i < numBars; i++) {
+          const normIdx = i / numBars;
+          const centerDist = 1 - Math.abs(normIdx - 0.5) * 1.8;
+          const frequencyFactor = Math.sin(normIdx * Math.PI) * (0.2 + centerDist * 0.8);
+          
+          const noise = Math.sin(p * 4 + i * 0.6) * 0.15 + Math.cos(p * 2.5 + i * 0.3) * 0.1;
+          const amplitude = Math.max(0.08, activeVolume * 1.6 + activePeak * 0.8 + noise);
+          const barHeight = Math.min(height * 0.42, (height * 0.35) * amplitude * frequencyFactor);
 
-      // 2. Draw Peak Meter Ring (shows instantaneous peak spikes as a segmented outer arc)
-      const peakRingRadius = baseRadius * 1.45 + activePeak * 25;
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, peakRingRadius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0.05, activePeak));
-      ctx.strokeStyle = `rgba(${primaryColor}, ${0.4 + activePeak * 0.5})`;
-      ctx.lineWidth = 4;
-      ctx.setLineDash([6, 6]);
-      ctx.stroke();
-      ctx.setLineDash([]); // Reset line dash
+          const bx = startX + i * (barWidth + barGap);
+          const topY = centerY - barHeight;
 
-      // 3. Draw pulsing frequency sine waves
-      const waveCount = 3;
-      for (let w = 0; w < waveCount; w++) {
-        ctx.beginPath();
-        const points = 80;
-        const radiusOffset = (w + 1) * 12 * (1 + activeVolume);
-        
-        for (let i = 0; i <= points; i++) {
-          const angle = (i / points) * Math.PI * 2;
-          const waveAlt = Math.sin(angle * (4 + w) + p * (1 + w * 0.3)) * (10 + activeVolume * 28 + activePeak * 10);
-          const r = baseRadius + radiusOffset + waveAlt;
-          const x = centerX + Math.cos(angle) * r;
-          const y = centerY + Math.sin(angle) * r;
+          // Top Bar
+          const grad = ctx.createLinearGradient(bx, centerY, bx, topY);
+          grad.addColorStop(0, `rgba(${primaryColor}, 0.9)`);
+          grad.addColorStop(1, `rgba(${secondaryColor}, 0.7)`);
 
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          if (ctx.roundRect) {
+            ctx.roundRect(bx, topY, barWidth, barHeight, [6, 6, 0, 0]);
+          } else {
+            ctx.rect(bx, topY, barWidth, barHeight);
+          }
+          ctx.fill();
+
+          // Bottom Reflection Bar
+          const bottomGrad = ctx.createLinearGradient(bx, centerY, bx, centerY + barHeight * 0.6);
+          bottomGrad.addColorStop(0, `rgba(${primaryColor}, 0.4)`);
+          bottomGrad.addColorStop(1, `rgba(${secondaryColor}, 0.05)`);
+
+          ctx.fillStyle = bottomGrad;
+          ctx.beginPath();
+          if (ctx.roundRect) {
+            ctx.roundRect(bx, centerY + 2, barWidth, barHeight * 0.6, [0, 0, 6, 6]);
+          } else {
+            ctx.rect(bx, centerY + 2, barWidth, barHeight * 0.6);
+          }
+          ctx.fill();
         }
 
-        ctx.closePath();
-        ctx.strokeStyle = `rgba(${primaryColor}, ${0.6 - w * 0.15})`;
-        ctx.lineWidth = 3 - w * 0.6;
+        // Center baseline glow line
+        ctx.beginPath();
+        ctx.moveTo(startX - 10, centerY);
+        ctx.lineTo(startX + totalWidth + 10, centerY);
+        ctx.strokeStyle = `rgba(${primaryColor}, 0.5)`;
+        ctx.lineWidth = 2;
         ctx.stroke();
-      }
 
-      // 4. Central Core Glowing Orb
-      const coreRadius = baseRadius * (0.85 + activeVolume * 0.35 + Math.sin(p * 1.5) * 0.04);
-      const coreGrad = ctx.createRadialGradient(
-        centerX - coreRadius * 0.3,
-        centerY - coreRadius * 0.3,
-        0,
-        centerX,
-        centerY,
-        coreRadius
-      );
-      coreGrad.addColorStop(0, `rgba(255, 255, 255, 0.95)`);
-      coreGrad.addColorStop(0.4, `rgba(${primaryColor}, 0.9)`);
-      coreGrad.addColorStop(1, `rgba(${secondaryColor}, 0.8)`);
+      } else if (visualizerStyle === 'wave') {
+        // --- CONTINUOUS SINE WAVE RIBBONS ---
+        const waveLayers = 4;
+        for (let w = 0; w < waveLayers; w++) {
+          ctx.beginPath();
+          ctx.moveTo(0, height);
 
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, coreRadius, 0, Math.PI * 2);
-      ctx.fillStyle = coreGrad;
-      ctx.shadowColor = `rgba(${primaryColor}, 0.6)`;
-      ctx.shadowBlur = 25 + activePeak * 35;
-      ctx.fill();
-      ctx.shadowBlur = 0; // reset shadow
+          const step = 8;
+          const speed = p * (1 + w * 0.25);
+          const freq = 0.012 + w * 0.004;
 
-      // 5. Orbiting particles for thinking/active states
-      if (state === 'thinking' || state === 'speaking' || state === 'listening') {
-        const particleCount = 8;
-        for (let i = 0; i < particleCount; i++) {
-          const orbitAngle = p * 1.2 + (i * Math.PI * 2) / particleCount;
-          const orbitDist = coreRadius + 22 + Math.sin(p * 2 + i) * 8;
-          const px = centerX + Math.cos(orbitAngle) * orbitDist;
-          const py = centerY + Math.sin(orbitAngle) * orbitDist;
+          for (let x = 0; x <= width; x += step) {
+            const yOffset =
+              Math.sin(x * freq + speed) * (15 + activeVolume * 45 + activePeak * 20) +
+              Math.cos(x * freq * 0.5 - speed) * (10 + activeVolume * 20);
+            const y = centerY + yOffset + (w - 1.5) * 15;
+
+            if (x === 0) ctx.lineTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+
+          ctx.lineTo(width, height);
+          ctx.closePath();
+
+          const waveGrad = ctx.createLinearGradient(0, centerY - 60, 0, height);
+          waveGrad.addColorStop(0, `rgba(${primaryColor}, ${0.5 - w * 0.1})`);
+          waveGrad.addColorStop(0.6, `rgba(${secondaryColor}, ${0.25 - w * 0.05})`);
+          waveGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+          ctx.fillStyle = waveGrad;
+          ctx.fill();
+
+          ctx.strokeStyle = `rgba(${primaryColor}, ${0.8 - w * 0.15})`;
+          ctx.lineWidth = 2.5 - w * 0.4;
+          ctx.stroke();
+        }
+
+      } else if (visualizerStyle === 'pulse') {
+        // --- CONCENTRIC RADIAL PULSE MATRIX ---
+        const ringCount = 6;
+        for (let i = 0; i < ringCount; i++) {
+          const ringProgress = ((p * 0.8 + i / ringCount) % 1);
+          const r = baseRadius * 0.3 + ringProgress * baseRadius * (2.2 + activePeak * 1.5);
+          const alpha = (1 - ringProgress) * (0.6 + activeVolume * 0.4);
 
           ctx.beginPath();
-          ctx.arc(px, py, 3 + activeVolume * 3, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(255, 255, 255, ${0.7 + Math.sin(p + i) * 0.3})`;
+          ctx.arc(centerX, centerY, r, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(${primaryColor}, ${alpha})`;
+          ctx.lineWidth = 2 + (1 - ringProgress) * 4;
+          ctx.stroke();
+        }
+
+        // Center Pulsing Core Dot
+        const dotRadius = baseRadius * (0.5 + activeVolume * 0.4);
+        const dotGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, dotRadius);
+        dotGrad.addColorStop(0, '#ffffff');
+        dotGrad.addColorStop(0.5, `rgba(${primaryColor}, 0.9)`);
+        dotGrad.addColorStop(1, `rgba(${secondaryColor}, 0.1)`);
+
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, dotRadius, 0, Math.PI * 2);
+        ctx.fillStyle = dotGrad;
+        ctx.shadowColor = `rgba(${primaryColor}, 0.8)`;
+        ctx.shadowBlur = 20 + activePeak * 30;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Radial Dot Matrix Spokes
+        const spokes = 12;
+        for (let s = 0; s < spokes; s++) {
+          const angle = (s / spokes) * Math.PI * 2 + p * 0.5;
+          const dist = dotRadius + 18 + Math.sin(p * 3 + s) * 8;
+          const sx = centerX + Math.cos(angle) * dist;
+          const sy = centerY + Math.sin(angle) * dist;
+
+          ctx.beginPath();
+          ctx.arc(sx, sy, 3 + activeVolume * 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255, 255, 255, ${0.7 + Math.sin(p * 2 + s) * 0.3})`;
           ctx.fill();
+        }
+
+      } else {
+        // --- DEFAULT ORB / PULSING CORE ---
+        // 1. Draw outer ambient glowing aura
+        const auraGradient = ctx.createRadialGradient(
+          centerX,
+          centerY,
+          baseRadius * 0.2,
+          centerX,
+          centerY,
+          baseRadius * (1.8 + activePeak * 1.4)
+        );
+        auraGradient.addColorStop(0, `rgba(${primaryColor}, ${0.25 + activePeak * 0.35})`);
+        auraGradient.addColorStop(0.5, `rgba(${secondaryColor}, ${0.1 + activePeak * 0.2})`);
+        auraGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, baseRadius * (2.2 + activePeak * 1.4), 0, Math.PI * 2);
+        ctx.fillStyle = auraGradient;
+        ctx.fill();
+
+        // 2. Draw Peak Meter Ring
+        const peakRingRadius = baseRadius * 1.45 + activePeak * 25;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, peakRingRadius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0.05, activePeak));
+        ctx.strokeStyle = `rgba(${primaryColor}, ${0.4 + activePeak * 0.5})`;
+        ctx.lineWidth = 4;
+        ctx.setLineDash([6, 6]);
+        ctx.stroke();
+        ctx.setLineDash([]); // Reset line dash
+
+        // 3. Draw pulsing frequency sine waves
+        const waveCount = 3;
+        for (let w = 0; w < waveCount; w++) {
+          ctx.beginPath();
+          const points = 80;
+          const radiusOffset = (w + 1) * 12 * (1 + activeVolume);
+          
+          for (let i = 0; i <= points; i++) {
+            const angle = (i / points) * Math.PI * 2;
+            const waveAlt = Math.sin(angle * (4 + w) + p * (1 + w * 0.3)) * (10 + activeVolume * 28 + activePeak * 10);
+            const r = baseRadius + radiusOffset + waveAlt;
+            const x = centerX + Math.cos(angle) * r;
+            const y = centerY + Math.sin(angle) * r;
+
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+
+          ctx.closePath();
+          ctx.strokeStyle = `rgba(${primaryColor}, ${0.6 - w * 0.15})`;
+          ctx.lineWidth = 3 - w * 0.6;
+          ctx.stroke();
+        }
+
+        // 4. Central Core Glowing Orb
+        const coreRadius = baseRadius * (0.85 + activeVolume * 0.35 + Math.sin(p * 1.5) * 0.04);
+        const coreGrad = ctx.createRadialGradient(
+          centerX - coreRadius * 0.3,
+          centerY - coreRadius * 0.3,
+          0,
+          centerX,
+          centerY,
+          coreRadius
+        );
+        coreGrad.addColorStop(0, `rgba(255, 255, 255, 0.95)`);
+        coreGrad.addColorStop(0.4, `rgba(${primaryColor}, 0.9)`);
+        coreGrad.addColorStop(1, `rgba(${secondaryColor}, 0.8)`);
+
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, coreRadius, 0, Math.PI * 2);
+        ctx.fillStyle = coreGrad;
+        ctx.shadowColor = `rgba(${primaryColor}, 0.6)`;
+        ctx.shadowBlur = 25 + activePeak * 35;
+        ctx.fill();
+        ctx.shadowBlur = 0; // reset shadow
+
+        // 5. Orbiting particles for thinking/active states
+        if (state === 'thinking' || state === 'speaking' || state === 'listening') {
+          const particleCount = 8;
+          for (let i = 0; i < particleCount; i++) {
+            const orbitAngle = p * 1.2 + (i * Math.PI * 2) / particleCount;
+            const orbitDist = coreRadius + 22 + Math.sin(p * 2 + i) * 8;
+            const px = centerX + Math.cos(orbitAngle) * orbitDist;
+            const py = centerY + Math.sin(orbitAngle) * orbitDist;
+
+            ctx.beginPath();
+            ctx.arc(px, py, 3 + activeVolume * 3, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.7 + Math.sin(p + i) * 0.3})`;
+            ctx.fill();
+          }
         }
       }
 

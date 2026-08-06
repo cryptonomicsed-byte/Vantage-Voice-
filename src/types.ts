@@ -61,7 +61,13 @@ export interface AppSettings {
   silenceTimeoutMs: number; // milliseconds of silence before ending user turn
   enableBargeIn: boolean;
   enableTools: boolean;
+  enableResearchTools: boolean;
   enableCodeInterpreter: boolean;
+  enableComputerControl: boolean;
+  enableCommunicationTools: boolean;
+  enableDevTools: boolean;
+  enableDomainCustomTools: boolean;
+  enableModernMetaTools: boolean;
   enableClawCrawler: boolean;
   enableKnowledgeBase: boolean;
   autoSummarizeOnStop: boolean;
@@ -73,8 +79,10 @@ export interface AppSettings {
   enableNoiseSuppression: boolean;
   enableVoiceIsolationGate: boolean;
   playbackSpeed: number; // AI speech playback rate multiplier (0.75 - 2.0)
+  visualizerStyle: 'orb' | 'bars' | 'wave' | 'pulse';
   enableCamera: boolean;
   enableScreenShare: boolean;
+  enableVoiceOutput: boolean; // Toggle voice playback on/off (if off, text-only response mode)
   theme: 'light' | 'dark' | 'system';
 }
 
@@ -88,6 +96,20 @@ export interface SessionSummary {
   totalTurns?: number;
   durationMinutes?: number;
   createdAt?: string;
+}
+
+export type MemoryTier = 'secure' | 'personal' | 'regular';
+
+export interface MemoryItem {
+  id: string;
+  key: string;
+  value: string;
+  category: string;
+  tier: MemoryTier;
+  createdAt: string;
+  updatedAt: string;
+  tags?: string[];
+  isMasked?: boolean;
 }
 
 export interface ServerToClientMessage {
@@ -132,3 +154,14 @@ export interface LatencyMetrics {
   lastAudioReceivedTime: number | null;
   latencyHistory: number[]; // Last 10 latency measurements in ms
 }
+
+export interface VoiceCommandLogItem {
+  id: string;
+  commandType: 'memory_store' | 'persona_switch' | 'speed_change' | 'general_action';
+  rawCommand: string;
+  parsedAction: string;
+  timestamp: string;
+  status: 'executed' | 'pending' | 'failed';
+  details?: Record<string, any>;
+}
+

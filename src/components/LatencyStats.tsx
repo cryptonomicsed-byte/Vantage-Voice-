@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import * as d3 from 'd3';
+import { ResponsiveContainer, LineChart, Line, Tooltip } from 'recharts';
 import { LatencyMetrics } from '../types';
 import { Zap, Activity, ArrowUpRight, ArrowDownLeft, TrendingUp } from 'lucide-react';
 
@@ -9,6 +10,16 @@ interface LatencyStatsProps {
 
 export const LatencyStats: React.FC<LatencyStatsProps> = ({ metrics }) => {
   const history = metrics.latencyHistory || [];
+
+  // Generate Recharts Data for last 10 turns
+  const rechartsData = useMemo(() => {
+    if (!history || history.length === 0) return [];
+    const data = history.slice(-10);
+    return data.map((val, i) => ({
+      turn: `Turn ${i + 1}`,
+      latency: val,
+    }));
+  }, [history]);
 
   // Generate D3 SVG paths for line and area fill
   const { linePath, areaPath, lastPoint, minVal, maxVal } = useMemo(() => {
@@ -114,13 +125,13 @@ export const LatencyStats: React.FC<LatencyStatsProps> = ({ metrics }) => {
         </div>
       </div>
 
-      {/* D3 Latency Sparkline Graph */}
+      {/* Latency Sparkline Graph (Recharts + D3) */}
       {history.length > 0 && (
         <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2">
             <TrendingUp className="w-3.5 h-3.5 text-indigo-400" />
             <span className="text-[11px] font-medium text-zinc-400">
-              Latency History (Last {Math.min(10, history.length)} exchanges)
+              Latency Sparkline (Last {Math.min(10, history.length)} turns)
             </span>
           </div>
 
@@ -130,33 +141,33 @@ export const LatencyStats: React.FC<LatencyStatsProps> = ({ metrics }) => {
               <span className="text-zinc-300">{maxVal}ms</span>
             </div>
 
-            {/* D3 SVG Sparkline */}
-            <div className="relative w-[120px] h-[32px]">
-              <svg className="w-full h-full overflow-visible">
-                <defs>
-                  <linearGradient id="latencyGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#818cf8" stopOpacity="0.4" />
-                    <stop offset="100%" stopColor="#818cf8" stopOpacity="0.0" />
-                  </linearGradient>
-                </defs>
-                {areaPath && <path d={areaPath} fill="url(#latencyGrad)" />}
-                {linePath && (
-                  <path d={linePath} fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" />
-                )}
-                {lastPoint && (
-                  <>
-                    <circle cx={lastPoint.x} cy={lastPoint.y} r="3" fill="#818cf8" />
-                    <circle
-                      cx={lastPoint.x}
-                      cy={lastPoint.y}
-                      r="6"
-                      fill="#818cf8"
-                      opacity="0.3"
-                      className="animate-ping"
-                    />
-                  </>
-                )}
-              </svg>
+            {/* Recharts Line Chart Sparkline */}
+            <div className="w-[140px] h-[36px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={rechartsData} margin={{ top: 4, right: 4, left: 4, bottom: 4 }}>
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#18181b',
+                      borderColor: '#3f3f46',
+                      borderRadius: '8px',
+                      fontSize: '10px',
+                      padding: '4px 8px',
+                      color: '#f4f4f5',
+                    }}
+                    itemStyle={{ color: '#818cf8' }}
+                    formatter={(val) => [`${val} ms`, 'Latency']}
+                    labelFormatter={(label) => label}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="latency"
+                    stroke="#818cf8"
+                    strokeWidth={2}
+                    dot={{ r: 2, fill: '#818cf8' }}
+                    activeDot={{ r: 4, fill: '#6366f1' }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </div>
         </div>
@@ -164,3 +175,4 @@ export const LatencyStats: React.FC<LatencyStatsProps> = ({ metrics }) => {
     </div>
   );
 };
+

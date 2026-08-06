@@ -6,6 +6,9 @@ import {
   LatencyMetrics,
   TranscriptItem,
   SessionSummary,
+  MemoryItem,
+  MemoryTier,
+  VoiceCommandLogItem,
 } from './types';
 import { DEFAULT_SETTINGS, SYSTEM_PERSONAS } from './lib/constants';
 import { AudioPlayer } from './lib/audioPlayer';
@@ -17,9 +20,64 @@ import { ControlBar } from './components/ControlBar';
 import { TranscriptView } from './components/TranscriptView';
 import { SettingsModal } from './components/SettingsModal';
 import { SessionSummaryModal } from './components/SessionSummaryModal';
+import { MemoryVaultModal } from './components/MemoryVaultModal';
+import { ResearchToolsModal } from './components/ResearchToolsModal';
+import { CodeComputationModal } from './components/CodeComputationModal';
+import { BrowserComputerControlModal } from './components/BrowserComputerControlModal';
+import { CommunicationProductivityModal } from './components/CommunicationProductivityModal';
+import { DevSoftwareToolsModal } from './components/DevSoftwareToolsModal';
+import { DomainCustomToolsModal } from './components/DomainCustomToolsModal';
+import { ModernMetaToolsModal } from './components/ModernMetaToolsModal';
+import { SessionRestoreBanner } from './components/SessionRestoreBanner';
 import { CameraPreview } from './components/CameraPreview';
 import { LatencyStats } from './components/LatencyStats';
-import { AlertCircle, RefreshCw, Zap } from 'lucide-react';
+import { AlertCircle, RefreshCw, Zap, Sparkles, X } from 'lucide-react';
+
+const STORAGE_KEY_TRANSCRIPTS = 'sonic_live_transcript_history';
+const STORAGE_KEY_MEMORIES = 'sonic_live_memory_vault';
+
+const DEFAULT_MEMORIES: MemoryItem[] = [
+  {
+    id: 'mem-01',
+    key: 'Primary Security Vault Token',
+    value: 'VAULT-7789-ALPHA',
+    category: 'Auth',
+    tier: 'secure',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    tags: ['auth', 'secret', 'passcode'],
+  },
+  {
+    id: 'mem-02',
+    key: 'User Preferred Name',
+    value: 'Alex',
+    category: 'Identity',
+    tier: 'personal',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    tags: ['identity', 'profile'],
+  },
+  {
+    id: 'mem-03',
+    key: 'Target Language Preference',
+    value: 'Spanish',
+    category: 'Preferences',
+    tier: 'personal',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    tags: ['language', 'translation'],
+  },
+  {
+    id: 'mem-04',
+    key: 'Agent Core Goal',
+    value: 'Low latency real-time voice intelligence with structured multi-tier memory vault.',
+    category: 'Goals',
+    tier: 'regular',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    tags: ['system', 'architecture'],
+  },
+];
 
 export default function App() {
   // App Configuration & Settings
@@ -40,6 +98,235 @@ export default function App() {
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
 
+  // Research Tools Modal State
+  const [isResearchToolsOpen, setIsResearchToolsOpen] = useState<boolean>(false);
+
+  // Code & Computation Modal State
+  const [isCodeComputationOpen, setIsCodeComputationOpen] = useState<boolean>(false);
+
+  // Browser & Computer Control Modal State
+  const [isComputerControlOpen, setIsComputerControlOpen] = useState<boolean>(false);
+
+  // Communication & Productivity Modal State
+  const [isCommunicationToolsOpen, setIsCommunicationToolsOpen] = useState<boolean>(false);
+
+  // Development & Software Modal State
+  const [isDevToolsOpen, setIsDevToolsOpen] = useState<boolean>(false);
+
+  // Domain-Specific & Custom Modal State
+  const [isDomainCustomToolsOpen, setIsDomainCustomToolsOpen] = useState<boolean>(false);
+
+  // Modern Standards & Meta-Tools Modal State
+  const [isModernMetaToolsOpen, setIsModernMetaToolsOpen] = useState<boolean>(false);
+
+  // Memory Vault State & Modals
+  const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState<boolean>(false);
+  const [memories, setMemories] = useState<MemoryItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_MEMORIES);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return DEFAULT_MEMORIES;
+  });
+
+  // Voice Command Logs State & Toast Banner State
+  const [voiceCommandLogs, setVoiceCommandLogs] = useState<VoiceCommandLogItem[]>([
+    {
+      id: 'cmd-initial',
+      commandType: 'memory_store',
+      rawCommand: 'Sonic, remember that my Wifi password is SecretPass2026',
+      parsedAction: '✓ Stored Memory: Key="Wifi password", Value="SecretPass2026" (SECURE Tier)',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'executed',
+      details: { key: 'Wifi password', value: 'SecretPass2026', tier: 'secure' },
+    },
+  ]);
+  const [toastBanner, setToastBanner] = useState<{ title: string; message: string } | null>(null);
+
+  const triggerToast = (title: string, message: string) => {
+    setToastBanner({ title, message });
+    setTimeout(() => setToastBanner(null), 4500);
+  };
+
+  // Voice-Activated Command Processor ("Sonic, remember that...")
+  const processVoiceCommand = useCallback((userText: string) => {
+    if (!userText || typeof userText !== 'string') return false;
+    const cleaned = userText.trim();
+
+    // Trigger Pattern: "Sonic, remember that..." or "remember that..." or "save memory..."
+    const memoryMatch = cleaned.match(
+      /(?:sonic,?\s*)?(?:please\s+)?(?:remember\s+(?:that\s+)?|save\s+(?:in\s+)?memory\s+|store\s+(?:in\s+)?memory\s+)(.+)/i
+    );
+
+    if (memoryMatch && memoryMatch[1]) {
+      const rawTarget = memoryMatch[1].trim();
+      let key = 'Voice Note';
+      let value = rawTarget;
+      let category = 'Voice Command';
+
+      // Parse Key and Value using common voice phrases (" is ", " = ", " set to ", " as ")
+      const parts = rawTarget.split(/\s+is\s+|\s+=\s+|\s+set\s+to\s+|\s+as\s+/i);
+      if (parts.length >= 2) {
+        key = parts[0].trim().replace(/^my\s+/i, '');
+        value = parts.slice(1).join(' is ').trim();
+      }
+
+      // Auto-tier classification
+      let tier: MemoryTier = 'regular';
+      if (/password|secret|token|api_key|auth|ssn|pin|vault|passcode/i.test(`${key} ${value}`)) {
+        tier = 'secure';
+        category = 'Auth/Vault';
+      } else if (/name|email|phone|address|preference|favorite|like|dislike|identity|birthday/i.test(`${key} ${value}`)) {
+        tier = 'personal';
+        category = 'Personal Identity';
+      }
+
+      // Automatically parse and store item in Memory Vault without requiring modal open
+      setMemories((prev) => {
+        const existingIdx = prev.findIndex(
+          (m) => m.key.toLowerCase().trim() === key.toLowerCase().trim()
+        );
+        if (existingIdx !== -1) {
+          const updated = [...prev];
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            value,
+            updatedAt: new Date().toISOString(),
+          };
+          return updated;
+        }
+
+        return [
+          {
+            id: `mem-${Date.now()}`,
+            key,
+            value,
+            category,
+            tier,
+            tags: ['voice_command', tier],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          ...prev,
+        ];
+      });
+
+      // Record in Voice Command Log
+      const newLogItem: VoiceCommandLogItem = {
+        id: `cmd-${Date.now()}`,
+        commandType: 'memory_store',
+        rawCommand: cleaned,
+        parsedAction: `✓ Stored Memory: Key="${key}", Value="${value}" (${tier.toUpperCase()} Tier)`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        status: 'executed',
+        details: { key, value, tier },
+      };
+
+      setVoiceCommandLogs((prev) => [newLogItem, ...prev]);
+      triggerToast('⚡ Voice Command Executed', `Stored "${key}" = "${value}" in Memory Vault!`);
+      return true;
+    }
+    return false;
+  }, []);
+
+  // Startup Session Restore Prompt State
+  const [showRestoreBanner, setShowRestoreBanner] = useState<boolean>(false);
+  const [stashedTranscripts, setStashedTranscripts] = useState<TranscriptItem[]>([]);
+
+  // Startup Check for Saved Session Transcripts
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_TRANSCRIPTS);
+      if (saved) {
+        const parsed: TranscriptItem[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setStashedTranscripts(parsed);
+          setShowRestoreBanner(true);
+        }
+      }
+    } catch (e) {}
+  }, []);
+
+  // Auto-Sync Theme Class on Document Element
+  useEffect(() => {
+    if (settings.theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [settings.theme]);
+
+  // Auto-Save Transcripts to localStorage
+  useEffect(() => {
+    if (transcripts.length > 0) {
+      try {
+        localStorage.setItem(STORAGE_KEY_TRANSCRIPTS, JSON.stringify(transcripts));
+      } catch (e) {}
+    }
+  }, [transcripts]);
+
+  // Auto-Save Memory Vault to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_MEMORIES, JSON.stringify(memories));
+    } catch (e) {}
+  }, [memories]);
+
+  // Restore Session Handlers
+  const handleRestoreSession = () => {
+    setTranscripts(stashedTranscripts);
+    setShowRestoreBanner(false);
+  };
+
+  const handleDismissRestoreSession = () => {
+    localStorage.removeItem(STORAGE_KEY_TRANSCRIPTS);
+    setStashedTranscripts([]);
+    setShowRestoreBanner(false);
+  };
+
+  // Memory Vault Handlers
+  const handleAddMemory = (newMem: Omit<MemoryItem, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const item: MemoryItem = {
+      ...newMem,
+      id: `mem-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    setMemories((prev) => [item, ...prev]);
+  };
+
+  const handleUpdateMemory = (id: string, updates: Partial<MemoryItem>) => {
+    setMemories((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, ...updates, updatedAt: new Date().toISOString() } : m))
+    );
+  };
+
+  const handleDeleteMemory = (id: string) => {
+    setMemories((prev) => prev.filter((m) => m.id !== id));
+  };
+
+  const handleClearAllMemories = () => {
+    setMemories([]);
+    localStorage.removeItem(STORAGE_KEY_MEMORIES);
+  };
+
+  const handleImportMemories = (importedItems: MemoryItem[]) => {
+    setMemories((prev) => {
+      const existingKeys = new Set(prev.map((m) => m.key.toLowerCase()));
+      const newItems = importedItems.filter((m) => !existingKeys.has(m.key.toLowerCase()));
+      return [...newItems, ...prev];
+    });
+  };
+
+  const memoryBreakdown = {
+    secure: memories.filter((m) => m.tier === 'secure').length,
+    personal: memories.filter((m) => m.tier === 'personal').length,
+    regular: memories.filter((m) => m.tier === 'regular').length,
+  };
+
   // Latency & Telemetry Metrics
   const [latencyMetrics, setLatencyMetrics] = useState<LatencyMetrics>({
     timeToFirstAudioMs: null,
@@ -59,6 +346,14 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const audioPlayerRef = useRef<AudioPlayer | null>(null);
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
+
+  // Sync settings.enableVoiceOutput with ref so WS callback reads live value
+  const enableVoiceOutputRef = useRef<boolean>(settings.enableVoiceOutput);
+  useEffect(() => {
+    enableVoiceOutputRef.current = settings.enableVoiceOutput;
+  }, [settings.enableVoiceOutput]);
+
+  const pendingTextMsgRef = useRef<string | null>(null);
 
   // Active AI Transcript Part tracker
   const currentAiTurnIdRef = useRef<string | null>(null);
@@ -214,6 +509,14 @@ export default function App() {
           },
         })
       );
+
+      // Send pending text message if user typed while starting session
+      if (pendingTextMsgRef.current) {
+        const textToSend = pendingTextMsgRef.current;
+        pendingTextMsgRef.current = null;
+        turnStartTimestampRef.current = Date.now();
+        ws.send(JSON.stringify({ type: 'text', text: textToSend }));
+      }
     };
 
     ws.onmessage = (event) => {
@@ -223,6 +526,12 @@ export default function App() {
         if (msg.type === 'connected') {
           setConnectionStatus('connected');
           setConversationState('idle');
+          if (pendingTextMsgRef.current) {
+            const textToSend = pendingTextMsgRef.current;
+            pendingTextMsgRef.current = null;
+            turnStartTimestampRef.current = Date.now();
+            ws.send(JSON.stringify({ type: 'text', text: textToSend }));
+          }
         } else if (msg.type === 'audio' && msg.audio) {
           // Calculate Time-To-First-Audio latency & update history for D3 sparkline
           if (turnStartTimestampRef.current !== null) {
@@ -240,8 +549,8 @@ export default function App() {
             turnStartTimestampRef.current = null;
           }
 
-          // Play incoming audio chunk
-          if (audioPlayerRef.current) {
+          // Play incoming audio chunk ONLY if Voice Output is enabled
+          if (audioPlayerRef.current && enableVoiceOutputRef.current) {
             audioPlayerRef.current.playChunk(msg.audio);
           }
 
@@ -291,6 +600,11 @@ export default function App() {
               });
             }
 
+            // Check for voice command triggers ("Sonic, remember that...")
+            if (text) {
+              processVoiceCommand(text);
+            }
+
             setTranscripts((prev) => [
               ...prev,
               {
@@ -333,6 +647,38 @@ export default function App() {
         } else if (msg.type === 'interrupted') {
           handleInterrupt();
         } else if (msg.type === 'tool_call') {
+          if (msg.toolName === 'store_memory_vault' && msg.toolArgs) {
+            const { key, value, category = 'General', tier = 'regular', tags = '' } = msg.toolArgs;
+            if (key && value) {
+              const memoryTier = (tier as MemoryTier) || 'regular';
+              setMemories((prev) => [
+                {
+                  id: `mem-${Date.now()}`,
+                  key,
+                  value,
+                  category,
+                  tier: memoryTier,
+                  tags: typeof tags === 'string' ? tags.split(',').map((t: string) => t.trim()) : tags,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                },
+                ...prev.filter((m) => m.key.toLowerCase() !== key.toLowerCase()),
+              ]);
+
+              const newLogItem: VoiceCommandLogItem = {
+                id: `cmd-tool-${Date.now()}`,
+                commandType: 'memory_store',
+                rawCommand: `[Agent Tool Call] store_memory_vault(key="${key}", value="${value}")`,
+                parsedAction: `✓ Agent Stored Memory: Key="${key}", Value="${value}" (${memoryTier.toUpperCase()} Tier)`,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                status: 'executed',
+                details: { key, value, tier: memoryTier },
+              };
+              setVoiceCommandLogs((prev) => [newLogItem, ...prev]);
+              triggerToast('⚡ Memory Vault Updated', `Agent stored "${key}" in Memory Vault!`);
+            }
+          }
+
           setTranscripts((prev) => [
             ...prev,
             {
@@ -422,6 +768,37 @@ export default function App() {
     // 2. Establish WebSocket connection with exponential backoff
     connectWebSocket();
   };
+
+  // Send Interactive Text Message Handler
+  const handleSendTextMessage = useCallback(
+    (text: string) => {
+      if (!text || !text.trim()) return;
+      const trimmed = text.trim();
+
+      // 1. Instantly append user turn in transcript panel
+      const userTurn: TranscriptItem = {
+        id: `user-${Date.now()}`,
+        sender: 'user',
+        text: trimmed,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isFinal: true,
+      };
+      setTranscripts((prev) => [...prev, userTurn]);
+
+      // 2. Check for voice command triggers ("Sonic, remember that...")
+      processVoiceCommand(trimmed);
+
+      // 3. Send over active WebSocket session, or connect if disconnected
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        turnStartTimestampRef.current = Date.now();
+        wsRef.current.send(JSON.stringify({ type: 'text', text: trimmed }));
+      } else {
+        pendingTextMsgRef.current = trimmed;
+        startSession();
+      }
+    },
+    [processVoiceCommand]
+  );
 
   // Generate Session Intelligence Summary via Backend Endpoint
   const handleGenerateSummary = async () => {
@@ -591,11 +968,19 @@ export default function App() {
         conversationState={conversationState}
         personaName={activePersona.name}
         voiceName={settings.voice}
+        agentFramework={settings.agentFramework}
         theme={settings.theme}
         onToggleTheme={() =>
           setSettings((prev) => ({ ...prev, theme: prev.theme === 'dark' ? 'light' : 'dark' }))
         }
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenResearchTools={() => setIsResearchToolsOpen(true)}
+        onOpenCodeComputation={() => setIsCodeComputationOpen(true)}
+        onOpenComputerControl={() => setIsComputerControlOpen(true)}
+        onOpenCommunicationTools={() => setIsCommunicationToolsOpen(true)}
+        onOpenDevTools={() => setIsDevToolsOpen(true)}
+        onOpenDomainCustomTools={() => setIsDomainCustomToolsOpen(true)}
+        onOpenModernMetaTools={() => setIsModernMetaToolsOpen(true)}
         timeToFirstAudioMs={latencyMetrics.timeToFirstAudioMs}
         translationMode={settings.translationMode}
         targetLanguage={settings.targetLanguage}
@@ -617,6 +1002,15 @@ export default function App() {
         </div>
       )}
 
+      {/* Startup Session Restore Banner Prompt */}
+      {showRestoreBanner && (
+        <SessionRestoreBanner
+          savedCount={stashedTranscripts.length}
+          onRestore={handleRestoreSession}
+          onDismiss={handleDismissRestoreSession}
+        />
+      )}
+
       {/* Main Body Grid */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 flex flex-col gap-5">
         {/* Top Visualizer Stage & Stats */}
@@ -632,6 +1026,7 @@ export default function App() {
               isMuted={isMuted}
               isConnected={connectionStatus === 'connected'}
               onStartSession={startSession}
+              visualizerStyle={settings.visualizerStyle}
             />
 
             <ControlBar
@@ -639,12 +1034,20 @@ export default function App() {
               conversationState={conversationState}
               isMuted={isMuted}
               pushToTalkMode={settings.pushToTalkMode}
+              enableVoiceOutput={settings.enableVoiceOutput}
+              onToggleVoiceOutput={() =>
+                setSettings((prev) => ({ ...prev, enableVoiceOutput: !prev.enableVoiceOutput }))
+              }
+              onSendTextMessage={handleSendTextMessage}
               onToggleSession={connectionStatus === 'connected' ? stopSession : startSession}
               onToggleMute={toggleMute}
               onInterrupt={handleInterrupt}
               onClearTranscripts={handleClearTranscripts}
               onExportTranscripts={handleExportTranscripts}
               onOpenSettings={() => setIsSettingsOpen(true)}
+              onOpenMemoryVault={() => setIsMemoryVaultOpen(true)}
+              memoryCount={memories.length}
+              memoryBreakdown={memoryBreakdown}
               personaName={activePersona.name}
             />
           </div>
@@ -681,11 +1084,30 @@ export default function App() {
         {/* Live Conversation Transcript Panel */}
         <TranscriptView
           transcripts={transcripts}
+          voiceCommandLogs={voiceCommandLogs}
+          onClearVoiceLogs={() => setVoiceCommandLogs([])}
           onPlayAudio={handleReplayAudio}
           isStreaming={conversationState === 'speaking' || conversationState === 'listening'}
           onGenerateSummary={handleGenerateSummary}
         />
       </main>
+
+      {/* Voice Command Execution Toast Banner */}
+      {toastBanner && (
+        <div className="fixed top-20 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-2xl bg-zinc-900 text-white shadow-2xl border border-indigo-500/50 animate-bounce max-w-sm">
+          <Sparkles className="w-5 h-5 text-indigo-400 shrink-0" />
+          <div className="text-xs flex-1">
+            <p className="font-bold text-indigo-300">{toastBanner.title}</p>
+            <p className="text-zinc-300">{toastBanner.message}</p>
+          </div>
+          <button
+            onClick={() => setToastBanner(null)}
+            className="p-1 rounded text-zinc-400 hover:text-white"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Settings Modal */}
       <SettingsModal
@@ -702,6 +1124,60 @@ export default function App() {
         summary={sessionSummary}
         isLoading={isGeneratingSummary}
         transcripts={transcripts}
+      />
+
+      {/* Agent Multi-Tier Memory Vault Modal */}
+      <MemoryVaultModal
+        isOpen={isMemoryVaultOpen}
+        onClose={() => setIsMemoryVaultOpen(false)}
+        memories={memories}
+        onAddMemory={handleAddMemory}
+        onUpdateMemory={handleUpdateMemory}
+        onDeleteMemory={handleDeleteMemory}
+        onClearAllMemories={handleClearAllMemories}
+        onImportMemories={handleImportMemories}
+      />
+
+      {/* Information & Research Tools Modal */}
+      <ResearchToolsModal
+        isOpen={isResearchToolsOpen}
+        onClose={() => setIsResearchToolsOpen(false)}
+      />
+
+      {/* Code & Computation Engine Modal */}
+      <CodeComputationModal
+        isOpen={isCodeComputationOpen}
+        onClose={() => setIsCodeComputationOpen(false)}
+      />
+
+      {/* Browser & Computer Control Suite Modal */}
+      <BrowserComputerControlModal
+        isOpen={isComputerControlOpen}
+        onClose={() => setIsComputerControlOpen(false)}
+      />
+
+      {/* Communication & Productivity Suite Modal */}
+      <CommunicationProductivityModal
+        isOpen={isCommunicationToolsOpen}
+        onClose={() => setIsCommunicationToolsOpen(false)}
+      />
+
+      {/* Development & Software Toolset Modal */}
+      <DevSoftwareToolsModal
+        isOpen={isDevToolsOpen}
+        onClose={() => setIsDevToolsOpen(false)}
+      />
+
+      {/* Domain-Specific & Custom Toolset Modal */}
+      <DomainCustomToolsModal
+        isOpen={isDomainCustomToolsOpen}
+        onClose={() => setIsDomainCustomToolsOpen(false)}
+      />
+
+      {/* Modern Standards & Meta-Tools Modal */}
+      <ModernMetaToolsModal
+        isOpen={isModernMetaToolsOpen}
+        onClose={() => setIsModernMetaToolsOpen(false)}
       />
     </div>
   );

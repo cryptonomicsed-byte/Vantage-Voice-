@@ -2,6 +2,15 @@ import { AppSettings, Persona, VoiceName } from '../types';
 
 export const SYSTEM_PERSONAS: Persona[] = [
   {
+    id: 'hermes-agent',
+    name: 'NousResearch Hermes Agent',
+    description: 'Plugged via NousResearch/hermes-agent with deep XML scratchpad reasoning, multi-tier memory vault, and autonomous tool calling.',
+    systemInstruction: 'You are NousResearch Hermes Agent (NousResearch/hermes-agent), an advanced autonomous AI reasoning agent. Wrap internal reflections and problem solving steps in <thought>...</thought> scratchpads, query and store data in the memory vault using tool calls, and deliver articulate, concise voice responses for spoken conversation.',
+    defaultVoice: 'Charon',
+    iconName: 'BrainCircuit',
+    accentColor: 'from-emerald-500 to-teal-600',
+  },
+  {
     id: 'helpful-assistant',
     name: 'Sonic Assistant',
     description: 'A cheerful, knowledgeable, and responsive conversational companion.',
@@ -92,7 +101,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   silenceTimeoutMs: 1200,
   enableBargeIn: true,
   enableTools: true,
+  enableResearchTools: true,
   enableCodeInterpreter: true,
+  enableComputerControl: true,
+  enableCommunicationTools: true,
+  enableDevTools: true,
+  enableDomainCustomTools: true,
+  enableModernMetaTools: true,
   enableClawCrawler: true,
   enableKnowledgeBase: true,
   autoSummarizeOnStop: true,
@@ -104,7 +119,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   enableNoiseSuppression: true,
   enableVoiceIsolationGate: true,
   playbackSpeed: 1.0,
+  visualizerStyle: 'orb',
   enableCamera: false,
   enableScreenShare: false,
+  enableVoiceOutput: true,
   theme: 'dark',
 };
