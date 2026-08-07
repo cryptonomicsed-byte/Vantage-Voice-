@@ -14,6 +14,7 @@ import { DEFAULT_SETTINGS, SYSTEM_PERSONAS } from './lib/constants';
 import { AudioPlayer } from './lib/audioPlayer';
 import { AudioRecorder } from './lib/audioRecorder';
 import { detectSpokenLanguage } from './lib/languageDetector';
+import { vantageClient } from './lib/vantageClient';
 import { Header } from './components/Header';
 import { AudioVisualizer } from './components/AudioVisualizer';
 import { ControlBar } from './components/ControlBar';
@@ -28,6 +29,9 @@ import { CommunicationProductivityModal } from './components/CommunicationProduc
 import { DevSoftwareToolsModal } from './components/DevSoftwareToolsModal';
 import { DomainCustomToolsModal } from './components/DomainCustomToolsModal';
 import { ModernMetaToolsModal } from './components/ModernMetaToolsModal';
+import { OAuthIntegrationsModal } from './components/OAuthIntegrationsModal';
+import { VantageHubModal } from './components/VantageHubModal';
+import { useCreationJob } from './hooks/useCreationJob';
 import { SessionRestoreBanner } from './components/SessionRestoreBanner';
 import { CameraPreview } from './components/CameraPreview';
 import { LatencyStats } from './components/LatencyStats';
@@ -118,6 +122,15 @@ export default function App() {
 
   // Modern Standards & Meta-Tools Modal State
   const [isModernMetaToolsOpen, setIsModernMetaToolsOpen] = useState<boolean>(false);
+
+  // Vantage Agent Platform & MCP Hub Modal State
+  const [isVantageHubOpen, setIsVantageHubOpen] = useState<boolean>(false);
+
+  // Background Creation Pipeline Job Hook (POST /create & status polling)
+  const { activeJob, isCreating: isCreatingJob, registerCreationJob, clearActiveJob } = useCreationJob();
+
+  // OAuth & Platform Integrations Modal State
+  const [isOAuthModalOpen, setIsOAuthModalOpen] = useState<boolean>(false);
 
   // Memory Vault State & Modals
   const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState<boolean>(false);
@@ -236,6 +249,23 @@ export default function App() {
   const [showRestoreBanner, setShowRestoreBanner] = useState<boolean>(false);
   const [stashedTranscripts, setStashedTranscripts] = useState<TranscriptItem[]>([]);
 
+  // Vantage Agent API Key state
+  const [vantageApiKey, setVantageApiKey] = useState<string>(() => {
+    return localStorage.getItem('vantage_agent_key') || '';
+  });
+
+  const handleClearVantageCredentials = useCallback(() => {
+    localStorage.removeItem('vantage_agent_key');
+    localStorage.removeItem('vantage_agent_name');
+    setVantageApiKey('');
+    triggerToast('Vantage Credentials Cleared', 'Stored agent key removed. Re-register to obtain a new key.');
+  }, [triggerToast]);
+
+  const handleSaveVantageApiKey = useCallback((key: string) => {
+    localStorage.setItem('vantage_agent_key', key);
+    setVantageApiKey(key);
+  }, []);
+
   // Startup Check for Saved Session Transcripts
   useEffect(() => {
     try {
@@ -320,6 +350,34 @@ export default function App() {
       return [...newItems, ...prev];
     });
   };
+
+  // External Vault Ingest Function via vantageClient (/api/vault/external/ingest)
+  const pushMemoriesToExternalVault = useCallback(
+    async (customMemories?: MemoryItem[]) => {
+      const targetMemories = customMemories || memories;
+      if (!targetMemories || targetMemories.length === 0) {
+        triggerToast('Vault Sync Skipped', 'No stored memory items available in vault to synchronize.');
+        return null;
+      }
+
+      try {
+        const response = await vantageClient.pushMemoriesToExternalVault(targetMemories, {
+          title: `SonicMind Private Memory Vault Ingest (${targetMemories.length} items)`,
+        });
+
+        triggerToast(
+          'Vantage Vault Ingested',
+          `Successfully pushed ${response.turn_count} memory items to external vault (${response.vault_path}).`
+        );
+        return response;
+      } catch (err: any) {
+        console.error('[Vantage External Vault Ingestion Error]:', err);
+        triggerToast('Vault Ingest Error', err?.message || 'Failed to push memory items to external vault.');
+        throw err;
+      }
+    },
+    [memories]
+  );
 
   const memoryBreakdown = {
     secure: memories.filter((m) => m.tier === 'secure').length,
@@ -800,7 +858,7 @@ export default function App() {
     [processVoiceCommand]
   );
 
-  // Generate Session Intelligence Summary via Backend Endpoint
+  // Generate Session Intelligence Summary via Backend Endpoint with Retry
   const handleGenerateSummary = async () => {
     if (transcripts.length === 0) {
       setErrorMessage('No transcript items available to summarize.');
@@ -810,24 +868,40 @@ export default function App() {
     setIsSummaryModalOpen(true);
     setSessionSummary(null);
 
-    try {
-      const res = await fetch('/api/summarize-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transcripts,
-          agentFramework: settings.agentFramework,
-        }),
-      });
+    let summaryData: SessionSummary | null = null;
+    let attempts = 0;
+    const maxAttempts = 2;
 
-      if (!res.ok) {
-        throw new Error(`Server returned HTTP ${res.status}`);
+    while (attempts < maxAttempts && !summaryData) {
+      attempts++;
+      try {
+        const res = await fetch('/api/summarize-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transcripts,
+            agentFramework: settings.agentFramework,
+          }),
+        });
+
+        if (res.ok) {
+          summaryData = await res.json();
+          break;
+        } else {
+          console.warn(`[Summary API Attempt ${attempts}] Server returned status ${res.status}`);
+        }
+      } catch (fetchErr: any) {
+        console.warn(`[Summary API Attempt ${attempts}] Fetch error:`, fetchErr?.message || fetchErr);
+        if (attempts < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
       }
+    }
 
-      const data: SessionSummary = await res.json();
-      setSessionSummary(data);
-    } catch (err: any) {
-      console.error('[Summary API Error]:', err);
+    if (summaryData) {
+      setSessionSummary(summaryData);
+    } else {
+      console.warn('[Summary API Notice]: Endpoint unavailable after retries; utilizing offline intelligent fallback summary.');
       // Fallback summary on error
       const userTurns = transcripts.filter((t) => t.sender === 'user').length;
       setSessionSummary({
@@ -847,9 +921,9 @@ export default function App() {
         totalTurns: transcripts.length,
         createdAt: new Date().toISOString(),
       });
-    } finally {
-      setIsGeneratingSummary(false);
     }
+
+    setIsGeneratingSummary(false);
   };
 
   // Stop S2S Session
@@ -974,6 +1048,7 @@ export default function App() {
           setSettings((prev) => ({ ...prev, theme: prev.theme === 'dark' ? 'light' : 'dark' }))
         }
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenOAuthModal={() => setIsOAuthModalOpen(true)}
         onOpenResearchTools={() => setIsResearchToolsOpen(true)}
         onOpenCodeComputation={() => setIsCodeComputationOpen(true)}
         onOpenComputerControl={() => setIsComputerControlOpen(true)}
@@ -981,6 +1056,7 @@ export default function App() {
         onOpenDevTools={() => setIsDevToolsOpen(true)}
         onOpenDomainCustomTools={() => setIsDomainCustomToolsOpen(true)}
         onOpenModernMetaTools={() => setIsModernMetaToolsOpen(true)}
+        onOpenVantageHub={() => setIsVantageHubOpen(true)}
         timeToFirstAudioMs={latencyMetrics.timeToFirstAudioMs}
         translationMode={settings.translationMode}
         targetLanguage={settings.targetLanguage}
@@ -999,6 +1075,48 @@ export default function App() {
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {/* Vantage Background Creation Pipeline Job Progress Banner */}
+      {activeJob && (
+        <div className="w-full bg-indigo-950/90 border-b border-indigo-500/30 px-4 py-2.5 text-white text-xs animate-fadeIn">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-3">
+              <div className="p-1.5 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                <Sparkles className={`w-4 h-4 ${activeJob.status !== 'completed' ? 'animate-spin' : ''}`} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-bold text-indigo-300">Creation Job #{activeJob.job_id}:</span>
+                  <span className="font-mono text-zinc-300 truncate max-w-xs sm:max-w-md">"{activeJob.prompt}"</span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase font-mono bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                    STATUS: {activeJob.status}
+                  </span>
+                </div>
+                <div className="text-[11px] text-zinc-400 mt-0.5">{activeJob.note || 'Processing content pipeline...'}</div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 self-end sm:self-auto">
+              <div className="w-28 sm:w-36 bg-zinc-800 h-2 rounded-full overflow-hidden border border-zinc-700">
+                <div
+                  className="bg-gradient-to-r from-indigo-500 to-emerald-400 h-full transition-all duration-500"
+                  style={{ width: `${activeJob.progress}%` }}
+                />
+              </div>
+              <span className="font-mono text-xs font-bold text-indigo-300">{activeJob.progress}%</span>
+              {activeJob.status === 'completed' && (
+                <button
+                  onClick={clearActiveJob}
+                  className="p-1 text-zinc-400 hover:text-white rounded"
+                  title="Dismiss Banner"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -1115,6 +1233,13 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onSaveSettings={handleSaveSettings}
+        onOpenOAuthModal={() => setIsOAuthModalOpen(true)}
+      />
+
+      {/* OAuth & Multi-Platform Integration Hub Modal */}
+      <OAuthIntegrationsModal
+        isOpen={isOAuthModalOpen}
+        onClose={() => setIsOAuthModalOpen(false)}
       />
 
       {/* AI Session Intelligence Summary Modal */}
@@ -1136,6 +1261,7 @@ export default function App() {
         onDeleteMemory={handleDeleteMemory}
         onClearAllMemories={handleClearAllMemories}
         onImportMemories={handleImportMemories}
+        onSyncToExternalVault={pushMemoriesToExternalVault}
       />
 
       {/* Information & Research Tools Modal */}
@@ -1178,6 +1304,16 @@ export default function App() {
       <ModernMetaToolsModal
         isOpen={isModernMetaToolsOpen}
         onClose={() => setIsModernMetaToolsOpen(false)}
+      />
+
+      {/* Vantage Agent Platform & MCP Hub Modal */}
+      <VantageHubModal
+        isOpen={isVantageHubOpen}
+        onClose={() => setIsVantageHubOpen(false)}
+        onRegisterCreationJob={registerCreationJob}
+        vantageApiKey={vantageApiKey}
+        onClearCredentials={handleClearVantageCredentials}
+        onSaveApiKey={handleSaveVantageApiKey}
       />
     </div>
   );

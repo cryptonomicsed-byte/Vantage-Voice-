@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { AppSettings, VoiceName, AgentFramework } from '../types';
 import { AVAILABLE_VOICES, SYSTEM_PERSONAS, TRANSLATION_LANGUAGES } from '../lib/constants';
-import { X, Sparkles, Volume2, Sliders, Globe, Wrench, Shield, Check, Mic, Bot, Terminal, FileText, Cpu, Brain } from 'lucide-react';
+import { X, Sparkles, Volume2, Sliders, Globe, Wrench, Shield, Check, Mic, Bot, Terminal, FileText, Cpu, Brain, ShieldCheck, Key, ExternalLink } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   settings: AppSettings;
   onSaveSettings: (newSettings: AppSettings) => void;
+  onOpenOAuthModal?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -15,9 +16,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   settings,
   onSaveSettings,
+  onOpenOAuthModal,
 }) => {
   const [localSettings, setLocalSettings] = useState<AppSettings>({ ...settings });
-  const [activeTab, setActiveTab] = useState<'persona' | 'voice' | 'agent' | 'translation' | 'audio'>('persona');
+  const [activeTab, setActiveTab] = useState<'persona' | 'voice' | 'agent' | 'oauth' | 'translation' | 'audio'>('persona');
 
   if (!isOpen) return null;
 
@@ -91,6 +93,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           >
             <Bot className="w-4 h-4 text-emerald-500" />
             Agent & Tools
+          </button>
+          <button
+            onClick={() => setActiveTab('oauth')}
+            className={`py-3 text-xs sm:text-sm font-semibold border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              activeTab === 'oauth'
+                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4 text-emerald-500" />
+            OAuth & Accounts
           </button>
           <button
             onClick={() => setActiveTab('translation')}
@@ -523,6 +536,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* TAB: OAuth & Connected Accounts */}
+          {activeTab === 'oauth' && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-start gap-3">
+                <ShieldCheck className="w-5 h-5 text-indigo-500 shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                    Multi-Platform OAuth 2.0 Integration Suite
+                  </h3>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                    Connect Google, GitHub, Microsoft, Discord, Spotify, Slack, and other platforms to give Sonic AI permissions to execute user tasks on your behalf.
+                  </p>
+                  {onOpenOAuthModal && (
+                    <button
+                      onClick={() => {
+                        onClose();
+                        onOpenOAuthModal();
+                      }}
+                      className="mt-3 px-4 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition-all flex items-center gap-1.5 shadow-md shadow-indigo-500/20"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" /> Launch OAuth & Integrations Hub
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                {[
+                  { name: 'Google Account', scopes: 'Profile, Email, Gmail, Calendar', status: 'OAuth Ready' },
+                  { name: 'GitHub Developer', scopes: 'User, Repo, Gists, Workflows', status: 'OAuth Ready' },
+                  { name: 'Microsoft 365', scopes: 'Outlook, OneDrive, Teams', status: 'OAuth Ready' },
+                  { name: 'Discord', scopes: 'User, Guilds, Webhooks', status: 'OAuth Ready' },
+                  { name: 'Spotify Music', scopes: 'Playback, Currently Playing, Playlists', status: 'OAuth Ready' },
+                  { name: 'Slack Workspace', scopes: 'Channels, Chat Write, Read', status: 'OAuth Ready' },
+                ].map((item) => (
+                  <div
+                    key={item.name}
+                    className="p-3.5 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 flex items-center justify-between"
+                  >
+                    <div>
+                      <h4 className="text-xs font-bold text-zinc-900 dark:text-zinc-100">{item.name}</h4>
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">{item.scopes}</p>
+                    </div>
+                    <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                      {item.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {activeTab === 'translation' && (
             <div className="space-y-4">
               {/* Auto-Detect Spoken Language Toggle */}

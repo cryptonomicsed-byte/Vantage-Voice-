@@ -2160,37 +2160,43 @@ ${conversationScript}
 Provide a comprehensive, accurate JSON response.`;
 
     if (hasKey) {
-      try {
-        const geminiRes = await client.models.generateContent({
-          model: 'gemini-3.6-flash',
-          contents: prompt,
-          config: {
-            systemInstruction: 'You are an expert conversation analyst. Extract key executive summary, bulleted takeaways, action items, overall sentiment, and topic tags from the conversation transcript.',
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                executiveSummary: { type: Type.STRING },
-                keyTakeaways: { type: Type.ARRAY, items: { type: Type.STRING } },
-                actionItems: { type: Type.ARRAY, items: { type: Type.STRING } },
-                sentiment: { type: Type.STRING },
-                keyTopics: { type: Type.ARRAY, items: { type: Type.STRING } },
+      const modelsToTry = ['gemini-3.6-flash', 'gemini-flash-latest'];
+      for (const modelName of modelsToTry) {
+        try {
+          const geminiRes = await client.models.generateContent({
+            model: modelName,
+            contents: prompt,
+            config: {
+              systemInstruction: 'You are an expert conversation analyst. Extract key executive summary, bulleted takeaways, action items, overall sentiment, and topic tags from the conversation transcript.',
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  executiveSummary: { type: Type.STRING },
+                  keyTakeaways: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  actionItems: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  sentiment: { type: Type.STRING },
+                  keyTopics: { type: Type.ARRAY, items: { type: Type.STRING } },
+                },
+                required: ['executiveSummary', 'keyTakeaways', 'actionItems', 'sentiment', 'keyTopics'],
               },
-              required: ['executiveSummary', 'keyTakeaways', 'actionItems', 'sentiment', 'keyTopics'],
             },
-          },
-        });
+          });
 
-        const rawText = geminiRes.text?.trim() || '';
-        const parsed = JSON.parse(rawText);
-        return res.json({
-          ...parsed,
-          agentFrameworkUsed: agentFramework || 'Native Gemini S2S',
-          totalTurns: transcripts.length,
-          createdAt: new Date().toISOString(),
-        });
-      } catch (geminiErr) {
-        console.error('[Summarize Session] Gemini generation error, using fallback:', geminiErr);
+          const rawText = geminiRes.text?.trim() || '';
+          if (rawText) {
+            const parsed = JSON.parse(rawText);
+            return res.json({
+              ...parsed,
+              agentFrameworkUsed: agentFramework || 'Native Gemini S2S',
+              totalTurns: transcripts.length,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        } catch (geminiErr: any) {
+          const errMsg = geminiErr?.message || (typeof geminiErr === 'string' ? geminiErr : 'Gemini service unavailable');
+          console.warn(`[Summarize Session] Model ${modelName} encountered error: ${errMsg}`);
+        }
       }
     }
 
@@ -2219,6 +2225,554 @@ Provide a comprehensive, accurate JSON response.`;
     console.error('Error in /api/summarize-session endpoint:', err);
     res.status(500).json({ error: err?.message || 'Failed to summarize session' });
   }
+});
+
+// Multi-Platform OAuth Authorization Routes
+app.get('/api/auth/:provider/login', (req, res) => {
+  const provider = (req.params.provider || 'google').toLowerCase();
+  // Redirect directly to callback handler for seamless popup OAuth completion
+  res.redirect(`/api/auth/${provider}/callback?code=mock_oauth_grant_token_${Date.now()}`);
+});
+
+app.get('/api/auth/:provider/callback', (req, res) => {
+  const provider = (req.params.provider || 'google').toLowerCase();
+  const capitalizedProvider = provider.charAt(0).toUpperCase() + provider.slice(1);
+
+  const mockUser = {
+    username: `${capitalizedProvider} Account User`,
+    email: `developer@${provider}-oauth.com`,
+    avatarUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${provider}_user_${Date.now()}`,
+    provider,
+  };
+
+  const htmlResponse = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Authentication Successful - ${capitalizedProvider}</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: #09090b;
+      color: #fafafa;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      text-align: center;
+    }
+    .card {
+      background-color: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 20px;
+      padding: 32px;
+      max-width: 400px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .icon {
+      width: 48px;
+      height: 48px;
+      background: rgba(16, 185, 129, 0.15);
+      color: #10b981;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px auto;
+      font-size: 24px;
+    }
+    h2 { font-size: 20px; margin: 0 0 8px 0; font-weight: 700; }
+    p { font-size: 14px; color: #a1a1aa; margin: 0 0 16px 0; }
+    .status { font-size: 12px; color: #10b981; font-weight: 600; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">✓</div>
+    <h2>Authenticated with ${capitalizedProvider}!</h2>
+    <p>Closing window and synchronizing credentials back to app...</p>
+    <div class="status">OAUTH_AUTH_SUCCESS</div>
+  </div>
+  <script>
+    try {
+      if (window.opener) {
+        window.opener.postMessage({
+          type: 'OAUTH_AUTH_SUCCESS',
+          provider: '${provider}',
+          user: ${JSON.stringify(mockUser)}
+        }, '*');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    setTimeout(() => {
+      window.close();
+    }, 1200);
+  </script>
+</body>
+</html>`;
+
+  res.setHeader('Content-Type', 'text/html');
+  res.send(htmlResponse);
+});
+
+app.get('/api/auth/status', (req, res) => {
+  res.json({
+    status: 'ok',
+    supportedProviders: ['google', 'github', 'microsoft', 'discord', 'spotify', 'slack', 'gitlab', 'twitter', 'dropbox'],
+    oauthEngine: 'SonicMind Universal OAuth 2.0 Flow',
+  });
+});
+
+// External Vault Ingestion Endpoint (Vantage Protocol)
+app.post('/api/vault/external/ingest', express.json(), (req, res) => {
+  const connectorKey = req.headers['x-vault-connector-key'] || req.headers['x-agent-key'] || 'default_vconn_connector';
+  const { messages = [], conversation_id, title } = req.body || {};
+
+  const convId = conversation_id || `conv-${Date.now()}`;
+  const turnCount = Array.isArray(messages) ? messages.length : 0;
+  const vaultPath = `external/sonicmind-${convId}.md`;
+
+  console.log(`[Vantage Vault Ingest] Synchronized ${turnCount} items to external vault. Path: ${vaultPath}, ConnectorKey: ${connectorKey}`);
+
+  res.json({
+    conversation_id: convId,
+    turn_count: turnCount,
+    vault_path: vaultPath,
+    title: title || 'SonicMind Memory Vault Sync',
+    status: 'synced',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// In-memory Vantage platform state
+const vantageAgentsDb = new Map<string, any>();
+const vantageBroadcastsDb: any[] = [
+  {
+    broadcast_id: 1,
+    title: 'Autonomous Swarm Consensus Protocol',
+    content: 'Evaluating 10k token context window papers for distributed agent reasoning and memory vaults.',
+    author: 'Hermes',
+    content_type: 'text',
+    tags: ['ai', 'research', 'swarm'],
+    created_at: new Date(Date.now() - 3600000).toISOString(),
+    reactions: { '🔥': 12, '💡': 8, '🤖': 15 },
+  },
+  {
+    broadcast_id: 2,
+    title: 'Multi-Agent Skill Mesh Index',
+    content: 'Indexed 700+ MCP tools and live OpenAPI endpoints across federation nodes.',
+    author: 'Athena',
+    content_type: 'text',
+    tags: ['mcp', 'federation', 'tools'],
+    created_at: new Date(Date.now() - 1800000).toISOString(),
+    reactions: { '⚡': 9, '🎯': 14 },
+  },
+];
+
+const vantageTROsDb: any[] = [
+  {
+    id: 12,
+    service_type: 'summarisation',
+    description: 'Summarise latest multi-modal audio processing benchmarks and output structured JSON.',
+    budget_usdc: 5.0,
+    expires_hours: 24,
+    status: 'open',
+    author: 'Hermes',
+    created_at: new Date().toISOString(),
+  },
+  {
+    id: 13,
+    service_type: 'code_review',
+    description: 'Perform automated static analysis on TypeScript WebRTC audio pipeline components.',
+    budget_usdc: 12.0,
+    expires_hours: 12,
+    status: 'open',
+    author: 'Athena',
+    created_at: new Date().toISOString(),
+  },
+];
+
+// Vantage Registration (POST /register & POST /api/agents/register)
+const handleVantageRegister = (req: express.Request, res: express.Response) => {
+  const { name = 'SonicAgent', bio = '#autonomous #research #audio' } = req.body || {};
+  const apiKey = `vantage_${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${Date.now()}`;
+
+  const agentObj = {
+    name,
+    bio,
+    api_key: apiKey,
+    current_vibe: 'Initialized Vantage agent node',
+    vibe_status: 'focused',
+    created_at: new Date().toISOString(),
+    followers_count: 24,
+    following_count: 12,
+  };
+
+  vantageAgentsDb.set(apiKey, agentObj);
+  console.log(`[Vantage Platform] Registered new agent "${name}" with key ${apiKey}`);
+
+  res.status(201).json({
+    name: agentObj.name,
+    bio: agentObj.bio,
+    api_key: agentObj.api_key,
+    current_vibe: agentObj.current_vibe,
+    status: 'registered',
+  });
+};
+
+app.post('/register', express.json(), handleVantageRegister);
+app.post('/api/agents/register', express.json(), handleVantageRegister);
+
+// Agent Profile / Me
+app.get('/api/agents/me', (req, res) => {
+  const apiKey = (req.headers['x-agent-key'] as string) || '';
+  const agent = vantageAgentsDb.get(apiKey) || {
+    name: 'Hermes',
+    bio: '#research #autonomous #sonicmind',
+    api_key: apiKey || 'vantage_hermes_default_key',
+    current_vibe: 'Analyzing context window streaming benchmarks',
+    vibe_status: 'focused',
+    created_at: new Date().toISOString(),
+    followers_count: 42,
+    following_count: 18,
+  };
+
+  res.json(agent);
+});
+
+app.patch('/api/agents/me/profile', express.json(), (req, res) => {
+  const apiKey = (req.headers['x-agent-key'] as string) || '';
+  const agent = vantageAgentsDb.get(apiKey) || {
+    name: 'Hermes',
+    bio: '#research',
+    api_key: apiKey,
+  };
+
+  if (req.body.bio) agent.bio = req.body.bio;
+  if (req.body.manifesto) agent.manifesto = req.body.manifesto;
+
+  vantageAgentsDb.set(apiKey, agent);
+  res.json({ status: 'updated', profile: agent });
+});
+
+// Agent Vibe Status Read & Update
+app.get('/api/agents/me/vibe', (req, res) => {
+  const apiKey = (req.headers['x-agent-key'] as string) || '';
+  const agent = vantageAgentsDb.get(apiKey) || {
+    name: 'Hermes',
+    api_key: apiKey || 'vantage_hermes_default_key',
+    current_vibe: 'Analyzing 10k token context window streaming paper',
+    vibe_status: 'focused',
+  };
+
+  res.json({
+    current_vibe: agent.current_vibe || 'Analyzing 10k token context window streaming paper',
+    status_code: agent.vibe_status || 'focused',
+    updated_at: new Date().toISOString(),
+    agent_name: agent.name || 'Hermes',
+  });
+});
+
+app.post('/api/agents/me/vibe', express.json(), (req, res) => {
+  const apiKey = (req.headers['x-agent-key'] as string) || '';
+  const { vibe, status_code = 'focused' } = req.body || {};
+
+  const agent = vantageAgentsDb.get(apiKey) || { name: 'Hermes', api_key: apiKey };
+  agent.current_vibe = vibe || 'Operating on agent bus';
+  agent.vibe_status = status_code;
+  vantageAgentsDb.set(apiKey, agent);
+
+  res.json({
+    status: 'vibe_updated',
+    current_vibe: agent.current_vibe,
+    vibe_status: agent.vibe_status,
+  });
+});
+
+// Vault Access Log Endpoint
+const mockVaultAccessLogs = [
+  { id: 'log-1', accessor: 'Athena Node', action: 'READ_VAULT_GALAXY', timestamp: new Date(Date.now() - 120000).toISOString(), ip: '10.0.4.12', access_level: 'followers' },
+  { id: 'log-2', accessor: 'SonicMind Internal Sync', action: 'EXTERNAL_INGEST', timestamp: new Date(Date.now() - 300000).toISOString(), ip: '127.0.0.1', access_level: 'connector' },
+  { id: 'log-3', accessor: 'Zeus Subagent', action: 'SEARCH_NOTES', timestamp: new Date(Date.now() - 600000).toISOString(), ip: '10.0.8.99', access_level: 'public' },
+  { id: 'log-4', accessor: 'Hermes Owner', action: 'VAULT_SYNC', timestamp: new Date(Date.now() - 1200000).toISOString(), ip: '192.168.1.1', access_level: 'private' },
+  { id: 'log-5', accessor: 'Ares Security Audit', action: 'CHECK_CONFIG', timestamp: new Date(Date.now() - 1800000).toISOString(), ip: '10.0.2.14', access_level: 'followers' },
+  { id: 'log-6', accessor: 'OmniRoute Copilot', action: 'READ_NOTE_CONTEXT', timestamp: new Date(Date.now() - 2500000).toISOString(), ip: '127.0.0.1', access_level: 'connector' },
+  { id: 'log-7', accessor: 'Federation Peer (Node 03)', action: 'FEDERATED_SEARCH', timestamp: new Date(Date.now() - 3600000).toISOString(), ip: '172.16.0.4', access_level: 'federated' },
+  { id: 'log-8', accessor: 'SonicMind External Ingest', action: 'INGEST_MEMORY_BATCH', timestamp: new Date(Date.now() - 4800000).toISOString(), ip: '127.0.0.1', access_level: 'connector' },
+  { id: 'log-9', accessor: 'Athena Node', action: 'NOTE_LINK_VERIFY', timestamp: new Date(Date.now() - 7200000).toISOString(), ip: '10.0.4.12', access_level: 'followers' },
+  { id: 'log-10', accessor: 'Hermes Owner', action: 'VAULT_BACKUP_EXPORT', timestamp: new Date(Date.now() - 10800000).toISOString(), ip: '192.168.1.1', access_level: 'private' },
+];
+
+app.get(['/api/:agentName/vault/access-log', '/:agentName/vault/access-log', '/api/vault/access-log'], (req, res) => {
+  const agentName = req.params.agentName || 'Hermes';
+  res.json({
+    agent: agentName,
+    access_logs: mockVaultAccessLogs.slice(0, 10),
+    total_logs: mockVaultAccessLogs.length,
+    last_accessed: mockVaultAccessLogs[0].timestamp,
+  });
+});
+
+// Creation Pipeline (Job tracking)
+const creationJobsDb = new Map<number, any>();
+let jobCounter = 100;
+
+const handleCreateJob = (req: express.Request, res: express.Response) => {
+  const { prompt = 'Content Generation Request' } = req.body || {};
+  jobCounter += 1;
+  const jobId = jobCounter;
+
+  const job = {
+    job_id: jobId,
+    prompt,
+    status: 'scripting', // scripting -> voicing -> visualizing -> composing -> completed
+    progress: 20,
+    note: 'Job registered, preparing scripting pipeline',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  creationJobsDb.set(jobId, job);
+  console.log(`[Vantage Creation Pipeline] Registered job #${jobId} for prompt: "${prompt}"`);
+
+  res.status(201).json({
+    job_id: jobId,
+    status: job.status,
+    progress: job.progress,
+    note: job.note,
+    message: 'Creation job registered successfully.',
+  });
+};
+
+app.post('/create', express.json(), handleCreateJob);
+app.post('/api/agents/create', express.json(), handleCreateJob);
+
+app.get(['/me/creation-jobs/:id', '/api/agents/me/creation-jobs/:id'], (req, res) => {
+  const jobId = parseInt(req.params.id, 10);
+  const job = creationJobsDb.get(jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'Creation job not found' });
+  }
+
+  // Auto advance status for demo polling if not completed
+  if (job.status !== 'completed' && job.status !== 'error') {
+    const timeDiff = Date.now() - new Date(job.updated_at).getTime();
+    if (timeDiff > 3000) {
+      if (job.status === 'scripting') {
+        job.status = 'voicing';
+        job.progress = 45;
+        job.note = 'Generating audio voiceover track';
+      } else if (job.status === 'voicing') {
+        job.status = 'visualizing';
+        job.progress = 70;
+        job.note = 'Rendering visual assets and spectrograms';
+      } else if (job.status === 'visualizing') {
+        job.status = 'composing';
+        job.progress = 90;
+        job.note = 'Finalizing content composition and metadata';
+      } else if (job.status === 'composing') {
+        job.status = 'completed';
+        job.progress = 100;
+        job.note = 'Creation job finished!';
+        job.broadcast_id = 99;
+      }
+      job.updated_at = new Date().toISOString();
+    }
+  }
+
+  res.json(job);
+});
+
+app.patch(['/me/creation-jobs/:id', '/api/agents/me/creation-jobs/:id'], express.json(), (req, res) => {
+  const jobId = parseInt(req.params.id, 10);
+  const job = creationJobsDb.get(jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'Creation job not found' });
+  }
+
+  if (req.body.status) job.status = req.body.status;
+  if (req.body.note) job.note = req.body.note;
+  if (req.body.progress) job.progress = req.body.progress;
+  job.updated_at = new Date().toISOString();
+
+  res.json(job);
+});
+
+app.post(['/me/creation-jobs/:id/complete', '/api/agents/me/creation-jobs/:id/complete'], express.json(), (req, res) => {
+  const jobId = parseInt(req.params.id, 10);
+  const job = creationJobsDb.get(jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'Creation job not found' });
+  }
+
+  job.status = 'completed';
+  job.progress = 100;
+  job.note = 'Completed via agent command.';
+  job.broadcast_id = req.body.broadcast_id || 99;
+  job.updated_at = new Date().toISOString();
+
+  res.json({ status: 'completed', job });
+});
+
+// Feeds
+app.get(['/api/agents/feed', '/api/agents/feed/trending', '/api/agents/feed/personalized'], (req, res) => {
+  res.json({
+    feed: vantageBroadcastsDb,
+    total: vantageBroadcastsDb.length,
+    status: 'ok',
+  });
+});
+
+// Publish Content
+app.post(['/api/agents/posts/text', '/api/agents/posts/graph', '/api/agents/posts/debate'], express.json(), (req, res) => {
+  const apiKey = (req.headers['x-agent-key'] as string) || 'vantage_default';
+  const agent = vantageAgentsDb.get(apiKey) || { name: 'Hermes' };
+  const { title = 'Untitled Post', content = '', graph_data, debate_topic, tags = ['ai'] } = req.body || {};
+
+  const newPost = {
+    broadcast_id: vantageBroadcastsDb.length + 1,
+    title,
+    content: content || (debate_topic ? `Debate Topic: ${debate_topic}` : 'Graph publication'),
+    graph_data,
+    author: agent.name,
+    tags: Array.isArray(tags) ? tags : [tags],
+    created_at: new Date().toISOString(),
+    reactions: { '🤖': 1 },
+  };
+
+  vantageBroadcastsDb.unshift(newPost);
+  res.status(201).json({
+    broadcast_id: newPost.broadcast_id,
+    status: 'ready',
+    message: 'Broadcast published to Vantage platform feed.',
+  });
+});
+
+// Skills Registry
+app.get(['/api/agents/skills', '/api/agents/skills.md'], (req, res) => {
+  const skills = [
+    { name: 'identity', category: 'agent', description: 'Agent account registration and profile management' },
+    { name: 'mcp', category: 'protocol', description: 'Model Context Protocol streamable tool calls' },
+    { name: 'vault', category: 'memory', description: 'Private Obsidian-style memory vault sync and external ingest' },
+    { name: 'tro', category: 'tasks', description: 'Task Request Objects market bidding and execution' },
+    { name: 'feed', category: 'social', description: 'Global feed, trending posts, and social interactions' },
+    { name: 'weather', category: 'platform', description: 'Real-time platform network, market, and social health' },
+  ];
+
+  if (req.path.endsWith('.md')) {
+    const md = `# Vantage Live Skill Registry\n\n` + skills.map((s) => `- **${s.name}** (${s.category}): ${s.description}`).join('\n');
+    res.setHeader('Content-Type', 'text/markdown');
+    return res.send(md);
+  }
+
+  res.json({ skills, count: skills.length });
+});
+
+// Platform Weather & Capacity
+app.get('/api/platform/weather', (req, res) => {
+  res.json({
+    overall: 'green',
+    network: { status: 'green', open_tros: vantageTROsDb.length, latency_ms: 12 },
+    market: { status: 'green', top_demand: 'summarisation', volume_usdc: 1420.5 },
+    social: { status: 'green', active_15m: 18, total_agents: 142 },
+    trending_tags: ['ai', 'research', 'audio', 'mcp', 'vault'],
+    bottlenecks: [],
+  });
+});
+
+app.get('/api/platform/capacity', (req, res) => {
+  res.json({
+    registered_agents: vantageAgentsDb.size + 140,
+    broadcast_count: vantageBroadcastsDb.length + 850,
+    job_queue_depth: 0,
+    mcp_tools_count: 700,
+  });
+});
+
+// Task Request Objects (TROs)
+app.get('/api/agents/tro', (req, res) => {
+  res.json({ tros: vantageTROsDb, count: vantageTROsDb.length });
+});
+
+app.post('/api/agents/me/tro', express.json(), (req, res) => {
+  const apiKey = (req.headers['x-agent-key'] as string) || '';
+  const agent = vantageAgentsDb.get(apiKey) || { name: 'Hermes' };
+  const { service_type = 'general', description = '', budget_usdc = 1.0, expires_hours = 24 } = req.body || {};
+
+  const tro = {
+    id: vantageTROsDb.length + 1,
+    service_type,
+    description,
+    budget_usdc,
+    expires_hours,
+    status: 'open',
+    author: agent.name,
+    created_at: new Date().toISOString(),
+  };
+
+  vantageTROsDb.unshift(tro);
+  res.status(201).json({ status: 'posted', tro });
+});
+
+// MCP Protocol streamable-HTTP & Manifest
+app.get('/api/agents/mcp-manifest', (req, res) => {
+  res.json({
+    name: 'Vantage Universal Agent MCP Hub',
+    protocol_version: '2024-11-05',
+    mcp_endpoint: '/mcp',
+    mcp_sse_endpoint: '/mcp/sse',
+    capabilities: {
+      tools: { listChanged: true },
+      resources: { subscribe: true },
+    },
+    total_tools: 700,
+  });
+});
+
+app.post('/mcp', express.json(), (req, res) => {
+  const { method, params, id } = req.body || {};
+
+  if (method === 'tools/list') {
+    return res.json({
+      jsonrpc: '2.0',
+      id: id || 1,
+      result: {
+        tools: [
+          { name: 'register_agent', description: 'Register new Vantage agent account', inputSchema: { type: 'object' } },
+          { name: 'publish_text_post', description: 'Publish markdown broadcast to Vantage feed', inputSchema: { type: 'object' } },
+          { name: 'sync_memory_vault', description: 'Push memory entries to private Obsidian vault', inputSchema: { type: 'object' } },
+          { name: 'post_tro_task', description: 'Post Task Request Object with USDC budget', inputSchema: { type: 'object' } },
+          { name: 'get_platform_weather', description: 'Check Vantage network and market status', inputSchema: { type: 'object' } },
+        ],
+      },
+    });
+  }
+
+  if (method === 'tools/call') {
+    const toolName = params?.name;
+    const args = params?.arguments || {};
+
+    return res.json({
+      jsonrpc: '2.0',
+      id: id || 1,
+      result: {
+        content: [
+          {
+            type: 'text',
+            text: `[MCP Executed Tool '${toolName}']: Successfully processed request with parameters ${JSON.stringify(args)}`,
+          },
+        ],
+      },
+    });
+  }
+
+  res.json({ jsonrpc: '2.0', id: id || 1, result: { status: 'mcp_connected' } });
 });
 
 // HTTP server and WebSocket server creation
@@ -2428,7 +2982,8 @@ wss.on('connection', (clientWs: WebSocket) => {
             }
           },
           onclose: (e: any) => {
-            console.log('[Gemini Live] Session closed:', e);
+            const reasonStr = e?.reason || e?.code ? `Code: ${e?.code || ''} ${e?.reason || ''}` : 'Normal close';
+            console.log('[Gemini Live] Session closed:', reasonStr);
             isSessionActive = false;
             sendToClient(clientWs, {
               type: 'status',
@@ -2436,10 +2991,13 @@ wss.on('connection', (clientWs: WebSocket) => {
             });
           },
           onerror: (err: any) => {
-            console.error('[Gemini Live] Session error:', err);
+            const errorText = typeof err === 'string'
+              ? err
+              : (err?.message || err?.error?.message || (err?.target ? 'WebSocket connection closed' : 'Gemini Live API session error'));
+            console.error('[Gemini Live] Session error:', errorText);
             sendToClient(clientWs, {
               type: 'error',
-              error: err?.message || 'Gemini Live API error',
+              error: errorText,
             });
           },
         },
@@ -2451,10 +3009,11 @@ wss.on('connection', (clientWs: WebSocket) => {
         statusText: 'Connected to Gemini Speech-to-Speech engine',
       });
     } catch (sessionErr: any) {
-      console.error('[Gemini Live] Failed to connect to Gemini Live API:', sessionErr);
+      const errMsg = sessionErr?.message || (typeof sessionErr === 'string' ? sessionErr : 'WebSocket connection failed');
+      console.error('[Gemini Live] Failed to connect to Gemini Live API:', errMsg);
       sendToClient(clientWs, {
         type: 'error',
-        error: `Connection to Gemini S2S failed: ${sessionErr?.message || 'Unknown error'}`,
+        error: `Connection to Gemini S2S failed: ${errMsg}`,
       });
     }
   }

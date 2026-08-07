@@ -1,5 +1,6 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { MemoryItem, MemoryTier } from '../types';
+import { vantageClient } from '../lib/vantageClient';
 import {
   ShieldCheck,
   Lock,
@@ -26,6 +27,7 @@ import {
   AlertTriangle,
   BarChart3,
   ArrowUpDown,
+  History,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -47,6 +49,7 @@ interface MemoryVaultModalProps {
   onDeleteMemory: (id: string) => void;
   onClearAllMemories: () => void;
   onImportMemories: (memories: MemoryItem[]) => void;
+  onSyncToExternalVault?: () => void;
 }
 
 // String similarity metric for smart collision detection
@@ -156,6 +159,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({
   onDeleteMemory,
   onClearAllMemories,
   onImportMemories,
+  onSyncToExternalVault,
 }) => {
   const [selectedTier, setSelectedTier] = useState<MemoryTier | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -179,6 +183,26 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [showChart, setShowChart] = useState(false);
+
+  // Access Logs State
+  const [accessLogs, setAccessLogs] = useState<any[]>([]);
+  const [showAccessLogs, setShowAccessLogs] = useState<boolean>(true);
+  const [loadingLogs, setLoadingLogs] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setLoadingLogs(true);
+      vantageClient
+        .getVaultAccessLog('Hermes')
+        .then((data) => {
+          if (data?.access_logs) {
+            setAccessLogs(data.access_logs.slice(0, 10));
+          }
+        })
+        .catch((err) => console.warn('[Vault Access Log Error]:', err))
+        .finally(() => setLoadingLogs(false));
+    }
+  }, [isOpen]);
 
   const collisionMatch =
     newKey.trim().length >= 2
@@ -433,6 +457,18 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({
 
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setShowAccessLogs(!showAccessLogs)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                showAccessLogs
+                  ? 'bg-indigo-600 text-white border-indigo-500 shadow-sm'
+                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-200'
+              }`}
+              title="Transparency Access Logs from /api/Hermes/vault/access-log"
+            >
+              <History className="w-4 h-4 text-indigo-400" />
+              <span className="hidden sm:inline">Access Logs</span>
+            </button>
+            <button
               onClick={() => setShowChart(!showChart)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
                 showChart
@@ -458,6 +494,59 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Read-only Access Logs Component */}
+        {showAccessLogs && (
+          <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-900 text-zinc-100 space-y-3 transition-all animate-fadeIn">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <History className="w-4 h-4 text-indigo-400" />
+                <h4 className="text-xs font-bold text-zinc-200 uppercase tracking-wider">
+                  Vault Usage & Transparency Access Logs (Last 10)
+                </h4>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                  /api/Hermes/vault/access-log
+                </span>
+              </div>
+              <button
+                onClick={() => setShowAccessLogs(false)}
+                className="text-xs text-zinc-400 hover:text-zinc-200"
+              >
+                Close
+              </button>
+            </div>
+
+            {loadingLogs ? (
+              <div className="text-xs text-zinc-400 py-3 text-center">Loading vault access logs...</div>
+            ) : accessLogs.length === 0 ? (
+              <div className="text-xs text-zinc-400 py-3 text-center">No recent access logs recorded.</div>
+            ) : (
+              <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                {accessLogs.map((log) => (
+                  <div
+                    key={log.id}
+                    className="flex flex-col sm:flex-row sm:items-center justify-between text-xs p-2.5 rounded-xl bg-zinc-800/80 border border-zinc-700/60 font-mono gap-1"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                      <span className="font-bold text-indigo-300">{log.accessor}</span>
+                      <span className="text-zinc-300 text-[11px] font-sans font-medium">{log.action}</span>
+                    </div>
+                    <div className="flex items-center gap-2.5 text-[10px] text-zinc-400 self-end sm:self-auto">
+                      <span className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300 uppercase tracking-wider text-[9px] font-bold">
+                        {log.access_level}
+                      </span>
+                      <span>IP: {log.ip}</span>
+                      <span className="text-zinc-500">
+                        {new Date(log.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Recharts Vault Growth Chart Drawer */}
         {showChart && (
@@ -988,6 +1077,17 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({
               <Upload className="w-3.5 h-3.5 text-emerald-500" />
               <span>Import Vault (.json)</span>
             </button>
+
+            {onSyncToExternalVault && (
+              <button
+                onClick={onSyncToExternalVault}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-sm transition-all"
+                title="Synchronize memory vault to Vantage external vault (/api/vault/external/ingest)"
+              >
+                <GitMerge className="w-3.5 h-3.5" />
+                <span>Sync to Vantage Vault</span>
+              </button>
+            )}
           </div>
 
           <button

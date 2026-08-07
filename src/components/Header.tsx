@@ -20,6 +20,9 @@ import {
   ChevronDown,
   Sparkles,
   Grid,
+  ShieldCheck,
+  Key,
+  Globe,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -31,6 +34,7 @@ interface HeaderProps {
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   onOpenSettings: () => void;
+  onOpenOAuthModal?: () => void;
   onOpenResearchTools?: () => void;
   onOpenCodeComputation?: () => void;
   onOpenComputerControl?: () => void;
@@ -38,6 +42,7 @@ interface HeaderProps {
   onOpenDevTools?: () => void;
   onOpenDomainCustomTools?: () => void;
   onOpenModernMetaTools?: () => void;
+  onOpenVantageHub?: () => void;
   timeToFirstAudioMs: number | null;
   translationMode: boolean;
   targetLanguage: string;
@@ -52,6 +57,7 @@ export const Header: React.FC<HeaderProps> = ({
   theme,
   onToggleTheme,
   onOpenSettings,
+  onOpenOAuthModal,
   onOpenResearchTools,
   onOpenCodeComputation,
   onOpenComputerControl,
@@ -59,6 +65,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenDevTools,
   onOpenDomainCustomTools,
   onOpenModernMetaTools,
+  onOpenVantageHub,
   timeToFirstAudioMs,
   translationMode,
   targetLanguage,
@@ -116,6 +123,15 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   const toolSuitesList = [
+    {
+      id: 'vantage',
+      name: 'Vantage Agent Platform',
+      shortName: 'Vantage Hub',
+      icon: Globe,
+      color: 'text-indigo-500 bg-indigo-500/10 border-indigo-500/20 hover:bg-indigo-500/20',
+      action: onOpenVantageHub,
+      desc: 'Account Registration, MCP ~700 Tools, Platform Feed, Vibe Bus & TRO Tasks',
+    },
     {
       id: 'meta',
       name: 'MCP & Meta Tools',
@@ -237,7 +253,7 @@ export const Header: React.FC<HeaderProps> = ({
               <Grid className="w-4 h-4 text-indigo-500" />
               <span className="hidden xs:inline">Tool Suites</span>
               <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border border-indigo-500/30 font-extrabold">
-                7
+                8
               </span>
               <ChevronDown className={`w-3.5 h-3.5 text-zinc-400 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} />
             </button>
@@ -247,7 +263,7 @@ export const Header: React.FC<HeaderProps> = ({
               <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-2xl p-3 z-50 animate-fadeIn space-y-1">
                 <div className="flex items-center justify-between px-2 py-1.5 border-b border-zinc-100 dark:border-zinc-800 mb-1">
                   <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
-                    <Grid className="w-3.5 h-3.5 text-indigo-500" /> Active Tool Suites (7)
+                    <Grid className="w-3.5 h-3.5 text-indigo-500" /> Active Tool Suites (8)
                   </span>
                   <span className="text-[10px] text-zinc-400 font-mono">Select to Launch</span>
                 </div>
@@ -285,6 +301,18 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             )}
           </div>
+
+          {/* OAuth Hub Button */}
+          {onOpenOAuthModal && (
+            <button
+              onClick={onOpenOAuthModal}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition-all shadow-sm"
+              title="Open OAuth & Integrations Hub"
+            >
+              <ShieldCheck className="w-4 h-4 text-emerald-500" />
+              <span className="hidden sm:inline">OAuth Hub</span>
+            </button>
+          )}
 
           {/* Theme Toggle */}
           <button
