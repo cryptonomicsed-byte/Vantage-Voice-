@@ -564,6 +564,9 @@ export default function App() {
             translationMode: settings.translationMode,
             targetLanguageCode: settings.targetLanguageCode,
             enableTools: settings.enableTools,
+            agentFramework: settings.agentFramework,
+            hermesAgentKey: settings.hermesAgentKey,
+            openClawAgentKey: settings.openClawAgentKey,
           },
         })
       );
@@ -644,6 +647,9 @@ export default function App() {
                           translationMode: prev.translationMode,
                           targetLanguageCode: langDetection.detectedCode,
                           enableTools: prev.enableTools,
+                          agentFramework: prev.agentFramework,
+                          hermesAgentKey: prev.hermesAgentKey,
+                          openClawAgentKey: prev.openClawAgentKey,
                         },
                       })
                     );
@@ -985,6 +991,9 @@ export default function App() {
             translationMode: newSettings.translationMode,
             targetLanguageCode: newSettings.targetLanguageCode,
             enableTools: newSettings.enableTools,
+            agentFramework: newSettings.agentFramework,
+            hermesAgentKey: newSettings.hermesAgentKey,
+            openClawAgentKey: newSettings.openClawAgentKey,
           },
         })
       );

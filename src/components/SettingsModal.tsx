@@ -265,22 +265,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {
                       id: 'hermes' as AgentFramework,
                       title: 'NousResearch Hermes Agent',
-                      desc: 'Plugged via gh repo clone NousResearch/hermes-agent. Autonomous reasoning engine with XML <thought> scratchpads, memory vault integration & voice synthesis.',
+                      desc: 'Real, live agent (gh repo clone NousResearch/hermes-agent) running on Vantage, DeepSeek-backed. Your speech is routed to its real cognition endpoint via Vantage /api/copilot/chat and spoken back verbatim.',
                       icon: Brain,
                       color: 'text-emerald-500',
-                      repoTag: 'gh repo clone NousResearch/hermes-agent',
+                      repoTag: 'gh repo clone NousResearch/hermes-agent -- LIVE bridge',
                     },
                     {
                       id: 'open_claw' as AgentFramework,
-                      title: 'Open Claw Web Crawler',
-                      desc: 'Autonomous web extraction & document clawing for real-time deep web synthesis.',
+                      title: 'OpenClaw Agent',
+                      desc: 'Real, live agent (gh repo clone openclaw/openclaw) running on Vantage, DeepSeek-backed. Same real bridge pattern as Hermes.',
                       icon: Terminal,
                       color: 'text-amber-500',
+                      repoTag: 'gh repo clone openclaw/openclaw -- LIVE bridge',
+                    },
+                    {
+                      id: 'open_human' as AgentFramework,
+                      title: 'OpenHuman',
+                      desc: 'gh repo clone tinyhumansai/openhuman. No real bridge wired up yet -- selecting this just tells the assistant to say so honestly if asked, no simulated behavior.',
+                      icon: Wrench,
+                      color: 'text-zinc-400',
+                      repoTag: 'gh repo clone tinyhumansai/openhuman -- not connected',
                     },
                     {
                       id: 'langchain_react' as AgentFramework,
                       title: 'ReAct Agent Loop',
-                      desc: 'Standard Thought-Action-Observation multi-step reasoning cycle.',
+                      desc: 'Standard Thought-Action-Observation multi-step reasoning cycle, run natively inside Gemini (not an external agent bridge).',
                       icon: Wrench,
                       color: 'text-cyan-500',
                     },
@@ -316,6 +325,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     );
                   })}
                 </div>
+
+                {(localSettings.agentFramework === 'hermes' || localSettings.agentFramework === 'open_claw') && (
+                  <div className="mt-3 p-3.5 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/50 space-y-2">
+                    <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
+                      <Key className="w-3.5 h-3.5 text-indigo-500" />
+                      {localSettings.agentFramework === 'hermes' ? 'Hermes' : 'OpenClaw'} Vantage Agent Key
+                    </label>
+                    <input
+                      type="password"
+                      value={
+                        localSettings.agentFramework === 'hermes'
+                          ? localSettings.hermesAgentKey
+                          : localSettings.openClawAgentKey
+                      }
+                      onChange={(e) =>
+                        setLocalSettings((prev) =>
+                          prev.agentFramework === 'hermes'
+                            ? { ...prev, hermesAgentKey: e.target.value }
+                            : { ...prev, openClawAgentKey: e.target.value }
+                        )
+                      }
+                      placeholder="vantage_... (leave blank to use the server default bridge key)"
+                      className="w-full rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-2.5 text-xs font-mono text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      This is the real agent's own X-Agent-Key on Vantage. Calling{' '}
+                      <code className="font-mono">/api/copilot/chat</code> with it makes Vantage relay to that
+                      agent's real cognition endpoint and return its real reply. Stored only in this browser.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Tool Capabilities Toggles */}

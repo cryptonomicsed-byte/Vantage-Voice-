@@ -97,6 +97,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   customInstruction: '',
   voice: 'Zephyr',
   agentFramework: 'native',
+  hermesAgentKey: '',
+  openClawAgentKey: '',
   vadSensitivity: 0.02, // RMS volume sensitivity threshold
   silenceTimeoutMs: 1200,
   enableBargeIn: true,

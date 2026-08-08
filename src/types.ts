@@ -46,10 +46,11 @@ export interface TranscriptItem {
   detectedLanguage?: string;
 }
 
-export type AgentFramework = 
+export type AgentFramework =
   | 'native'
   | 'hermes'
   | 'open_claw'
+  | 'open_human'
   | 'langchain_react';
 
 export interface AppSettings {
@@ -57,6 +58,8 @@ export interface AppSettings {
   customInstruction: string;
   voice: VoiceName;
   agentFramework: AgentFramework;
+  hermesAgentKey: string; // X-Agent-Key for Vantage's real Hermes agent bridge; blank = use server default
+  openClawAgentKey: string; // X-Agent-Key for Vantage's real OpenClaw agent bridge; blank = use server default
   vadSensitivity: number; // 0.01 to 0.15 RMS threshold
   silenceTimeoutMs: number; // milliseconds of silence before ending user turn
   enableBargeIn: boolean;

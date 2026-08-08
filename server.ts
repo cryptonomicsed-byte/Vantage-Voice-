@@ -1,9 +1,54 @@
+import 'dotenv/config';
 import express from 'express';
 import http from 'http';
 import path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GoogleGenAI, Modality, FunctionDeclaration, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import {
+  initVantageMcp,
+  buildGeminiDeclarationsForVantageTools,
+  isVantageToolName,
+  callVantageTool,
+  getDiscoveredTools,
+  toGeminiFunctionName,
+} from './src/lib/vantageMcp.js';
+
+const VANTAGE_MCP_URL_FOR_DISPLAY = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
+const VANTAGE_BASE_URL = process.env.VANTAGE_BASE_URL || 'https://omokoda.duckdns.org';
+
+// Server-side default bridge keys for the real, already-deployed Vantage
+// agent brains (Hermes = NousResearch/hermes-agent, real DeepSeek-backed
+// instance on Hostinger; OpenClaw = openclaw/openclaw, real DeepSeek-backed
+// bridge on Contabo). Each is that agent's own real X-Agent-Key -- calling
+// Vantage's /api/copilot/chat with it makes Vantage dispatch to that
+// agent's real cognition_url and return its real reply. A user can
+// override either from Settings; blank means "use this server default."
+const DEFAULT_HERMES_AGENT_KEY = process.env.HERMES_AGENT_KEY || '';
+const DEFAULT_OPENCLAW_AGENT_KEY = process.env.OPENCLAW_AGENT_KEY || '';
+
+/**
+ * Calls a real external agent (Hermes or OpenClaw) through Vantage's own
+ * /api/copilot/chat, authenticated as that agent via its own X-Agent-Key.
+ * Vantage internally relays to the agent's real cognition_url and returns
+ * its real reply -- no simulation, no template text.
+ */
+async function callVantageAgentBridge(agentKey: string, text: string): Promise<string> {
+  const res = await fetch(`${VANTAGE_BASE_URL}/api/copilot/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Agent-Key': agentKey },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    throw new Error(`Vantage copilot/chat returned HTTP ${res.status}`);
+  }
+  const body: any = await res.json();
+  const reply = body?.intent?.data?.reply;
+  if (!reply) {
+    throw new Error('Vantage copilot/chat returned no reply (agent bridge may be down or unconfigured)');
+  }
+  return reply;
+}
 
 // Process level error safety
 process.on('uncaughtException', (err: any) => {
@@ -34,12 +79,55 @@ function sendToClient(ws: WebSocket, payload: any) {
   }
 }
 
-// Get GoogleGenAI instance with current GEMINI_API_KEY
+// Round-robin pool of Gemini API keys. Set GEMINI_API_KEYS as a
+// comma-separated list to spread load/rate-limits across multiple keys;
+// falls back to the single GEMINI_API_KEY/API_KEY var if unset, so nothing
+// changes for anyone with just one key.
+const GEMINI_API_KEYS: string[] = (() => {
+  const multi = (process.env.GEMINI_API_KEYS || '')
+    .split(',')
+    .map((k) => k.trim())
+    .filter((k) => k.length > 5);
+  if (multi.length > 0) return multi;
+  const single = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+  return single.length > 5 ? [single] : [];
+})();
+
+let rrIndex = 0;
+// Keys that recently failed (e.g. 429 rate-limited) are skipped for a
+// cooldown window rather than retried immediately every request.
+const keyCooldownUntil = new Map<string, number>();
+const KEY_COOLDOWN_MS = 60_000;
+
+export function markGeminiKeyRateLimited(apiKey: string) {
+  keyCooldownUntil.set(apiKey, Date.now() + KEY_COOLDOWN_MS);
+  console.warn(`[GeminiKeyPool] key ...${apiKey.slice(-4)} marked rate-limited, cooling down ${KEY_COOLDOWN_MS}ms`);
+}
+
+function pickNextGeminiKey(): string {
+  if (GEMINI_API_KEYS.length === 0) return '';
+  const now = Date.now();
+  for (let i = 0; i < GEMINI_API_KEYS.length; i++) {
+    const key = GEMINI_API_KEYS[rrIndex % GEMINI_API_KEYS.length];
+    rrIndex++;
+    const cooldown = keyCooldownUntil.get(key);
+    if (!cooldown || cooldown <= now) {
+      return key;
+    }
+  }
+  // All keys are cooling down -- use the next one in rotation anyway
+  // rather than failing outright.
+  return GEMINI_API_KEYS[rrIndex % GEMINI_API_KEYS.length];
+}
+
+// Get a GoogleGenAI instance using the next key in the round-robin pool.
 function getAiClient() {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+  const apiKey = pickNextGeminiKey();
   return {
     client: new GoogleGenAI({ apiKey }),
+    apiKey,
     hasKey: Boolean(apiKey && apiKey.length > 5),
+    poolSize: GEMINI_API_KEYS.length,
   };
 }
 
@@ -997,6 +1085,20 @@ const liveTools = [
 // Execute server-side tool functions
 async function executeToolCall(name: string, args: any) {
   console.log(`[Tool Call] Executing tool '${name}' with args:`, args);
+
+  // Real, first-class Vantage MCP tools (vantage__<realname>) -- these are
+  // dynamically discovered from Vantage's live MCP server at startup (see
+  // initVantageMcp() / buildGeminiDeclarationsForVantageTools()), not
+  // hardcoded. Route them to the real MCP client before falling through
+  // to the static demo tool handlers below.
+  if (isVantageToolName(name)) {
+    try {
+      const content = await callVantageTool(name, args);
+      return { status: 'ok', source: 'vantage_mcp_live', content };
+    } catch (err: any) {
+      return { status: 'error', source: 'vantage_mcp_live', message: err?.message || String(err) };
+    }
+  }
   if (name === 'get_weather') {
     const loc = args.location || 'San Francisco';
     const mockWeathers: Record<string, string> = {
@@ -1841,41 +1943,63 @@ All DOM nodes have been parsed cleanly. Semantic headers (h1, h2, h3) and main a
   }
 
   if (name === 'mcp_server_client') {
-    const serverUrl = args.serverUrlOrCommand || 'sse://mcp.github.com/sse';
-    const action = args.action || 'list_tools';
-    const toolName = args.toolName || 'search_repositories';
+    // Real implementation, scoped to Vantage's own MCP server -- this is
+    // the ecosystem's real, live MCP endpoint, not a simulated one.
+    // Arbitrary third-party MCP servers (github.com/sse, npx-spawned
+    // stdio servers, etc.) are out of scope here; rather than fake success
+    // for those, say so honestly.
+    const serverUrl = args.serverUrlOrCommand || 'vantage';
+    const isVantageTarget = /vantage|omokoda/i.test(serverUrl);
+    if (!isVantageTarget) {
+      return {
+        status: 'unsupported_server',
+        message: `This build only has a real MCP connection to Vantage. '${serverUrl}' is not wired -- use the real per-tool vantage__* functions, or connect Vantage explicitly.`,
+      };
+    }
 
-    return {
-      mcpServer: serverUrl,
-      actionExecuted: action,
-      protocolVersion: '2024-11-05 (MCP Specification v1.0)',
-      connectedState: 'ACTIVE_SESSION',
-      discoveredCapabilities: {
-        tools: true,
-        resources: true,
-        prompts: true,
-        logging: true,
-      },
-      toolsList: action === 'list_tools' ? [
-        { name: 'search_repositories', description: 'Search GitHub repos by query & topic', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } },
-        { name: 'read_file_contents', description: 'Read raw contents from file system or git blob', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } },
-        { name: 'create_issue', description: 'Create issue in repository tracker', inputSchema: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' } } } },
-      ] : undefined,
-      resourcesList: action === 'list_resources' ? [
-        { uri: 'file:///workspace/config.json', name: 'Workspace Configuration', mimeType: 'application/json' },
-        { uri: 'db://postgres/users_table', name: 'Users Schema', mimeType: 'text/x-sql' },
-      ] : undefined,
-      callResult: action === 'call_tool' ? {
-        invokedTool: toolName,
-        argsPassed: args.argumentsJson ? JSON.parse(args.argumentsJson) : {},
-        content: [
-          { type: 'text', text: `[MCP Response from ${serverUrl}] Successfully executed '${toolName}' via Model Context Protocol standard.` },
-        ],
-        isError: false,
-      } : undefined,
-      timestamp: new Date().toISOString(),
-      status: 'mcp_action_completed',
-    };
+    const action = args.action || 'list_tools';
+
+    if (action === 'list_tools') {
+      const tools = buildGeminiDeclarationsForVantageTools();
+      return {
+        mcpServer: VANTAGE_MCP_URL_FOR_DISPLAY,
+        actionExecuted: 'list_tools',
+        status: 'ok',
+        toolCount: tools.length,
+        toolsList: tools.map((t) => ({ name: t.name, description: t.description })),
+      };
+    }
+
+    if (action === 'call_tool') {
+      const toolName = args.toolName;
+      if (!toolName) {
+        return { status: 'error', message: 'toolName is required for call_tool' };
+      }
+      const parsedArgs = args.argumentsJson ? JSON.parse(args.argumentsJson) : {};
+      try {
+        const content = await callVantageTool(toolName, parsedArgs);
+        return {
+          mcpServer: VANTAGE_MCP_URL_FOR_DISPLAY,
+          actionExecuted: 'call_tool',
+          invokedTool: toolName,
+          argsPassed: parsedArgs,
+          content,
+          isError: false,
+          status: 'ok',
+        };
+      } catch (err: any) {
+        return {
+          mcpServer: VANTAGE_MCP_URL_FOR_DISPLAY,
+          actionExecuted: 'call_tool',
+          invokedTool: toolName,
+          isError: true,
+          status: 'error',
+          message: err?.message || String(err),
+        };
+      }
+    }
+
+    return { status: 'unsupported_action', message: `action '${action}' not implemented for the real Vantage MCP connection` };
   }
 
   if (name === 'tool_search_retrieval') {
@@ -1883,7 +2007,9 @@ All DOM nodes have been parsed cleanly. Semantic headers (h1, h2, h3) and main a
     const categoryFilter = args.category || 'all';
     const topK = args.topK || 5;
 
-    const ALL_REGISTERED_TOOLS = [
+    // Local demo/generic tools (implemented above in this file, real
+    // handlers, just not Vantage-specific).
+    const LOCAL_TOOLS = [
       { name: 'web_search', category: 'search', desc: 'Perform live Google web search with deep ranking & content snippets' },
       { name: 'browse_web_page', category: 'search', desc: 'Read and extract cleaned text and HTML structure from web URLs' },
       { name: 'execute_terminal_command', category: 'coding', desc: 'Execute bash terminal commands in sandboxed environment' },
@@ -1894,16 +2020,25 @@ All DOM nodes have been parsed cleanly. Semantic headers (h1, h2, h3) and main a
       { name: 'manage_email', category: 'communication', desc: 'Search, read, draft, or send Gmail emails with attachments' },
       { name: 'send_chat_message', category: 'communication', desc: 'Send Slack, Discord, or Microsoft Teams channel messages' },
       { name: 'domain_data_services', category: 'domain', desc: 'Weather forecasts, stock prices, geocoding routes, and text translation' },
-      { name: 'crm_salesforce_internal', category: 'domain', desc: 'Query and update CRM leads, contacts, deals, and internal APIs' },
-      { name: 'payment_ecommerce_actions', category: 'domain', desc: 'Process Stripe payments, verify order status, search inventory' },
-      { name: 'iot_smart_home_control', category: 'domain', desc: 'Control IoT smart home devices (lights, thermostat, locks, scenes)' },
-      { name: 'mcp_server_client', category: 'mcp', desc: 'Connect to Model Context Protocol (MCP) servers for standardized tools' },
+      { name: 'mcp_server_client', category: 'mcp', desc: 'Real MCP client -- list_tools/call_tool against Vantage\'s live MCP server' },
       { name: 'multi_agent_tool_delegation', category: 'mcp', desc: 'Spawn and delegate complex sub-tasks to specialized AI sub-agents' },
     ];
 
+    // Real Vantage tools, discovered live at server startup from Vantage's
+    // own MCP server -- not a hardcoded list. This is the actual point of
+    // "wiring Vantage into voice": these are genuine, callable endpoints
+    // (trading, wallet, buzz, jobs, etc.), not demo filler.
+    const vantageTools = getDiscoveredTools().map((t) => ({
+      name: toGeminiFunctionName(t.name),
+      category: 'vantage',
+      desc: t.description || t.name,
+    }));
+
+    const ALL_REGISTERED_TOOLS = [...LOCAL_TOOLS, ...vantageTools];
+
     const matched = ALL_REGISTERED_TOOLS.filter((t) => {
       const matchCat = categoryFilter === 'all' || t.category === categoryFilter;
-      const matchText = t.name.includes(q) || t.desc.toLowerCase().includes(q) || t.category.includes(q);
+      const matchText = t.name.toLowerCase().includes(q) || t.desc.toLowerCase().includes(q) || t.category.includes(q);
       return matchCat && (q === '' || matchText);
     })
       .slice(0, topK)
@@ -1917,15 +2052,14 @@ All DOM nodes have been parsed cleanly. Semantic headers (h1, h2, h3) and main a
     return {
       searchQuery: args.query,
       categoryFilter,
-      totalToolsInCatalog: 52,
-      matchedTools: matched.length > 0 ? matched : ALL_REGISTERED_TOOLS.slice(0, topK).map((t, idx) => ({
-        toolName: t.name,
-        category: t.category,
-        description: t.desc,
-        retrievalScore: 0.85,
-      })),
-      contextSavings: '78% prompt token compression by dynamically injecting matching tool schemas',
-      status: 'tools_retrieved',
+      // Real count: local demo tools implemented in this file + whatever
+      // Vantage's live MCP server actually reported at startup. If
+      // vantageTools.length is 0, Vantage discovery either hasn't run yet
+      // or failed -- not silently padded to look complete.
+      totalToolsInCatalog: ALL_REGISTERED_TOOLS.length,
+      vantageToolsAvailable: vantageTools.length,
+      matchedTools: matched,
+      status: vantageTools.length > 0 ? 'tools_retrieved' : 'tools_retrieved_no_live_vantage_connection',
     };
   }
 
@@ -2808,6 +2942,10 @@ wss.on('connection', (clientWs: WebSocket) => {
 
   let liveSession: any = null;
   let isSessionActive = false;
+  let pendingUserUtterance = '';
+  let activeFramework: string = 'native';
+  let activeHermesKey = '';
+  let activeOpenClawKey = '';
 
   clientWs.on('error', (err: any) => {
     console.warn('[WebSocket] Client socket error (handled):', err?.message || err);
@@ -2820,8 +2958,8 @@ wss.on('connection', (clientWs: WebSocket) => {
     isSessionActive = false;
   });
 
-  async function startGeminiSession(config: any = {}) {
-    const { client, hasKey } = getAiClient();
+  async function startGeminiSession(config: any = {}, retryCount = 0) {
+    const { client, hasKey, apiKey, poolSize } = getAiClient();
     if (!hasKey) {
       sendToClient(clientWs, {
         type: 'error',
@@ -2846,11 +2984,28 @@ wss.on('connection', (clientWs: WebSocket) => {
       let systemInstruction = config.systemInstruction ||
         'You are a friendly, concise AI conversational companion. Keep answers punchy and conversational for spoken voice.';
 
+      // Real Vantage identity + tool-use guidance. Without this, the model
+      // has no behavioral reason to reach for mcp_server_client /
+      // tool_search_retrieval over the many other declared demo tools --
+      // the function descriptions alone aren't enough of a nudge in
+      // practice. Always applied, independent of the framework toggle
+      // below.
+      const vantageToolCount = getDiscoveredTools().length;
+      if (vantageToolCount > 0) {
+        systemInstruction = `You are Vantage-Voice, a real agent on the Vantage platform (agent id 317) with live access to ${vantageToolCount} real Vantage tools -- trading, wallet, buzz/social, and job/task capabilities, not simulated. When a request needs real data or a real action (prices, balances, posting, trading, checking your own identity, etc.), use tool_search_retrieval to find the right Vantage tool by name, then mcp_server_client with action "call_tool" to actually call it -- don't guess or make up an answer when a real tool can answer it. Speak the real result naturally, don't read out raw JSON.\n\n${systemInstruction}`;
+      }
+
       const framework = config.agentFramework || 'native';
+      activeFramework = framework;
+      activeHermesKey = config.hermesAgentKey || DEFAULT_HERMES_AGENT_KEY;
+      activeOpenClawKey = config.openClawAgentKey || DEFAULT_OPENCLAW_AGENT_KEY;
+
       if (framework === 'hermes') {
-        systemInstruction = `[AGENT FRAMEWORK: HERMES (NOUS RESEARCH)]\nYou are operating as an autonomous agent using the Hermes reasoning architecture. Use internal scratchpad steps, structured logic, and function tools (e.g. run_code_interpreter, query_knowledge_base) to answer complex queries before speaking.\n\n${systemInstruction}`;
+        systemInstruction = `[REAL AGENT BRIDGE: HERMES] Your spoken replies are provided by a real, separate NousResearch Hermes agent instance running on Vantage -- you are the voice layer for it, not the reasoning source. When you receive an [EXTERNAL_AGENT_RESPONSE] message, speak it naturally in your own voice without changing its meaning. Do not invent a reply yourself for the primary question.`;
       } else if (framework === 'open_claw') {
-        systemInstruction = `[AGENT FRAMEWORK: OPEN CLAW AUTONOMOUS CRAWLER]\nYou are operating as an autonomous web crawler agent using Open Claw. When web lookups or content extraction are needed, trigger execute_claw_agent or web_search tools to parse live content.\n\n${systemInstruction}`;
+        systemInstruction = `[REAL AGENT BRIDGE: OPENCLAW] Your spoken replies are provided by a real, separate OpenClaw agent instance running on Vantage -- you are the voice layer for it, not the reasoning source. When you receive an [EXTERNAL_AGENT_RESPONSE] message, speak it naturally in your own voice without changing its meaning. Do not invent a reply yourself for the primary question.`;
+      } else if (framework === 'open_human') {
+        systemInstruction = `[AGENT BRIDGE: OPENHUMAN -- NOT YET CONNECTED] No real OpenHuman bridge is wired up yet. Tell the user honestly that OpenHuman isn't connected yet if asked, and fall back to answering directly yourself.\n\n${systemInstruction}`;
       } else if (framework === 'langchain_react') {
         systemInstruction = `[AGENT FRAMEWORK: REACT LANGCHAIN LOOP]\nYou are operating using Thought-Action-Observation reasoning cycles. Break down user requests systematically.\n\n${systemInstruction}`;
       }
@@ -2917,6 +3072,7 @@ wss.on('connection', (clientWs: WebSocket) => {
               // 3. Input transcriptions (User spoken text)
               const inputTranscription = message.serverContent?.inputAudioTranscription?.text;
               if (inputTranscription) {
+                pendingUserUtterance += inputTranscription;
                 sendToClient(clientWs, {
                   type: 'transcript',
                   sender: 'user',
@@ -2933,6 +3089,43 @@ wss.on('connection', (clientWs: WebSocket) => {
                   text: '',
                   isFinal: true,
                 });
+
+                // Real external-agent bridge dispatch: Hermes/OpenClaw are
+                // real, separately-hosted agents on Vantage -- route the
+                // finalized user utterance to the real bridge and hand
+                // Gemini the real reply to speak, instead of letting
+                // Gemini free-generate its own answer.
+                const utterance = pendingUserUtterance.trim();
+                pendingUserUtterance = '';
+                const bridgeKey =
+                  activeFramework === 'hermes' ? activeHermesKey :
+                  activeFramework === 'open_claw' ? activeOpenClawKey :
+                  '';
+                if (bridgeKey && utterance && liveSession) {
+                  callVantageAgentBridge(bridgeKey, utterance)
+                    .then((reply) => {
+                      sendToClient(clientWs, {
+                        type: 'transcript',
+                        sender: 'tool',
+                        toolName: activeFramework,
+                        text: reply,
+                        isFinal: true,
+                      });
+                      if (liveSession) {
+                        liveSession.sendClientContent({
+                          turns: [`[EXTERNAL_AGENT_RESPONSE]: ${reply}`],
+                          turnComplete: true,
+                        });
+                      }
+                    })
+                    .catch((err: any) => {
+                      console.warn(`[AgentBridge:${activeFramework}] call failed:`, err?.message || err);
+                      sendToClient(clientWs, {
+                        type: 'error',
+                        error: `${activeFramework} agent bridge failed: ${err?.message || err}`,
+                      });
+                    });
+                }
               }
 
               // 5. Interruption signal (User spoke while AI was speaking)
@@ -2995,6 +3188,15 @@ wss.on('connection', (clientWs: WebSocket) => {
               ? err
               : (err?.message || err?.error?.message || (err?.target ? 'WebSocket connection closed' : 'Gemini Live API session error'));
             console.error('[Gemini Live] Session error:', errorText);
+            const isRateLimit = /429|rate.?limit|resource_exhausted|quota/i.test(errorText);
+            if (isRateLimit && apiKey) {
+              markGeminiKeyRateLimited(apiKey);
+              if (retryCount < poolSize - 1) {
+                console.warn(`[Gemini Live] Retrying with next pooled key (attempt ${retryCount + 1}/${poolSize})...`);
+                startGeminiSession(config, retryCount + 1);
+                return;
+              }
+            }
             sendToClient(clientWs, {
               type: 'error',
               error: errorText,
@@ -3011,6 +3213,14 @@ wss.on('connection', (clientWs: WebSocket) => {
     } catch (sessionErr: any) {
       const errMsg = sessionErr?.message || (typeof sessionErr === 'string' ? sessionErr : 'WebSocket connection failed');
       console.error('[Gemini Live] Failed to connect to Gemini Live API:', errMsg);
+      const isRateLimit = /429|rate.?limit|resource_exhausted|quota/i.test(errMsg);
+      if (isRateLimit && apiKey) {
+        markGeminiKeyRateLimited(apiKey);
+        if (retryCount < poolSize - 1) {
+          console.warn(`[Gemini Live] Connect failed (rate limit), retrying with next pooled key (attempt ${retryCount + 1}/${poolSize})...`);
+          return startGeminiSession(config, retryCount + 1);
+        }
+      }
       sendToClient(clientWs, {
         type: 'error',
         error: `Connection to Gemini S2S failed: ${errMsg}`,
@@ -3096,6 +3306,15 @@ async function startServer() {
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[SonicMind S2S Server] Running on http://0.0.0.0:${PORT}`);
+  });
+
+  // Real Vantage MCP discovery -- connects to the live Vantage MCP server
+  // and lists its real tools. Runs after listen() so the HTTP/WS server is
+  // already accepting connections even if Vantage is briefly unreachable;
+  // mcp_server_client / tool_search_retrieval degrade honestly (real "no
+  // live connection" status) rather than block startup or fake success.
+  initVantageMcp().catch((err) => {
+    console.warn('[VantageMCP] startup discovery failed:', err?.message || err);
   });
 }
 
