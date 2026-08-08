@@ -50,6 +50,31 @@ async function callVantageAgentBridge(agentKey: string, text: string): Promise<s
   return reply;
 }
 
+// Real, dedicated Gemini TTS model -- used to speak agent-bridge (Hermes/
+// OpenClaw) replies directly, instead of re-injecting the reply text back
+// into the live conversational session and waiting for Gemini to
+// re-generate + re-speak it. That old path was a second full Gemini
+// round-trip on top of the agent's own generation time; this cuts it to
+// one. Output is 24kHz mono PCM16, the exact same format the Live API's
+// audio deltas use, so the client's existing audio player needs no changes.
+async function synthesizeSpeechDirect(text: string, voiceName: string): Promise<string> {
+  const { client, hasKey } = getAiClient();
+  if (!hasKey) throw new Error('No Gemini API key available for direct TTS');
+
+  const response = await client.models.generateContent({
+    model: 'gemini-2.5-flash-preview-tts',
+    contents: [{ role: 'user', parts: [{ text }] }],
+    config: {
+      responseModalities: [Modality.AUDIO],
+      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+    },
+  });
+
+  const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  if (!audioData) throw new Error('Gemini TTS returned no audio data');
+  return audioData;
+}
+
 // Process level error safety
 process.on('uncaughtException', (err: any) => {
   console.warn('[Process] Uncaught exception (handled):', err?.message || err);
@@ -3338,7 +3363,7 @@ wss.on('connection', (clientWs: WebSocket) => {
                   '';
                 if (bridgeKey && utterance && liveSession) {
                   callVantageAgentBridge(bridgeKey, utterance)
-                    .then((reply) => {
+                    .then(async (reply) => {
                       sendToClient(clientWs, {
                         type: 'transcript',
                         sender: 'tool',
@@ -3346,11 +3371,26 @@ wss.on('connection', (clientWs: WebSocket) => {
                         text: reply,
                         isFinal: true,
                       });
-                      if (liveSession) {
-                        liveSession.sendClientContent({
-                          turns: [`[EXTERNAL_AGENT_RESPONSE]: ${reply}`],
-                          turnComplete: true,
+                      // Speak the real reply directly via dedicated TTS --
+                      // no second Gemini Live round-trip, no risk of the
+                      // model paraphrasing instead of repeating it exactly.
+                      try {
+                        const audioData = await synthesizeSpeechDirect(reply, voiceName);
+                        sendToClient(clientWs, { type: 'audio', audio: audioData });
+                        sendToClient(clientWs, {
+                          type: 'transcript',
+                          sender: 'model',
+                          text: reply,
+                          isFinal: true,
                         });
+                      } catch (ttsErr: any) {
+                        console.warn(`[AgentBridge:${activeFramework}] direct TTS failed, falling back to live re-voice:`, ttsErr?.message || ttsErr);
+                        if (liveSession) {
+                          liveSession.sendClientContent({
+                            turns: [`[EXTERNAL_AGENT_RESPONSE]: ${reply}`],
+                            turnComplete: true,
+                          });
+                        }
                       }
                     })
                     .catch((err: any) => {
