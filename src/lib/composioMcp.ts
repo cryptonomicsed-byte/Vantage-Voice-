@@ -1,0 +1,168 @@
+/**
+ * Real MCP client connecting this voice agent to Composio's per-user Tool
+ * Router MCP server -- the same real OAuth connections made in the OAuth
+ * Integrations modal (Gmail, GitHub, Outlook, Discord, Slack, GitLab,
+ * Notion, Dropbox) become real, callable tools here. No simulated tool
+ * results: an unconnected toolkit returns Composio's real "not connected"
+ * error, not a fabricated success.
+ */
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { FunctionDeclaration } from '@google/genai';
+import { Type } from '@google/genai';
+import { getComposioMcpSession, isComposioConfigured } from './composioOAuth.js';
+
+export interface ComposioMcpTool {
+  name: string;
+  description: string;
+  inputSchema: any;
+}
+
+let client: Client | null = null;
+let connecting: Promise<Client> | null = null;
+let discoveredTools: ComposioMcpTool[] = [];
+const nameMap = new Map<string, string>(); // gemini name -> real composio tool name
+
+export function toGeminiFunctionName(composioToolName: string): string {
+  return `composio__${composioToolName}`.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 64);
+}
+
+async function connect(): Promise<Client> {
+  if (client) return client;
+  if (connecting) return connecting;
+
+  connecting = (async () => {
+    // Composio mints a brand-new tool-router session URL on every
+    // create() call -- fetch it once here and reuse the same MCP
+    // connection for the process lifetime, same pattern as Vantage's
+    // client but with a dynamically-issued endpoint instead of a fixed one.
+    const { url, headers } = await getComposioMcpSession();
+    const transport = new StreamableHTTPClientTransport(new URL(url), {
+      requestInit: { headers },
+    });
+    const c = new Client({ name: 'vantage-voice', version: '1.0.0' }, { capabilities: {} });
+    await c.connect(transport);
+    client = c;
+    console.log(`[ComposioMCP] connected to ${url}`);
+    return c;
+  })();
+
+  try {
+    return await connecting;
+  } finally {
+    connecting = null;
+  }
+}
+
+/**
+ * Connects and (re)discovers Composio's real tool list. Safe to call
+ * repeatedly -- called at startup and again after any OAuth connect
+ * completes, since a newly-connected toolkit's tools weren't visible
+ * before. Failures are logged, not thrown, so a Composio outage degrades
+ * this feature instead of crashing the whole voice server.
+ */
+export async function initComposioMcp(): Promise<ComposioMcpTool[]> {
+  if (!isComposioConfigured()) {
+    discoveredTools = [];
+    return [];
+  }
+  try {
+    const c = await connect();
+    const result = await c.listTools();
+    discoveredTools = result.tools.map((t) => ({
+      name: t.name,
+      description: t.description || '',
+      inputSchema: t.inputSchema,
+    }));
+    nameMap.clear();
+    for (const t of discoveredTools) {
+      nameMap.set(toGeminiFunctionName(t.name), t.name);
+    }
+    console.log(`[ComposioMCP] discovered ${discoveredTools.length} real tools from connected toolkits`);
+    return discoveredTools;
+  } catch (err: any) {
+    console.warn('[ComposioMCP] discovery failed (voice will run without live Composio tools):', err?.message || err);
+    discoveredTools = [];
+    return [];
+  }
+}
+
+export function getDiscoveredComposioTools(): ComposioMcpTool[] {
+  return discoveredTools;
+}
+
+export function isComposioToolName(geminiFunctionName: string): boolean {
+  return nameMap.has(geminiFunctionName);
+}
+
+function mapSchemaType(jsonType: string | undefined): Type {
+  switch (jsonType) {
+    case 'integer':
+    case 'number':
+      return Type.NUMBER;
+    case 'boolean':
+      return Type.BOOLEAN;
+    case 'object':
+      return Type.OBJECT;
+    case 'array':
+      return Type.ARRAY;
+    default:
+      return Type.STRING;
+  }
+}
+
+function convertProperties(schema: any): Record<string, any> {
+  const props = schema?.properties || {};
+  const out: Record<string, any> = {};
+  for (const [key, val] of Object.entries<any>(props)) {
+    out[key] = {
+      type: mapSchemaType(val?.type),
+      description: val?.description || val?.title || key,
+    };
+  }
+  return out;
+}
+
+/**
+ * Builds real Gemini FunctionDeclarations from Composio's real discovered
+ * tools -- Tool Router's meta-tool set (COMPOSIO_SEARCH_TOOLS,
+ * COMPOSIO_EXECUTE_TOOL, etc.) rather than one declaration per toolkit
+ * action, since the router keeps the catalog small regardless of how
+ * many toolkits are connected.
+ */
+export function buildGeminiDeclarationsForComposioTools(): FunctionDeclaration[] {
+  return discoveredTools.map((t) => {
+    const properties = convertProperties(t.inputSchema);
+    const required = Array.isArray(t.inputSchema?.required) ? t.inputSchema.required : [];
+    return {
+      name: toGeminiFunctionName(t.name),
+      description: `[Composio connector] ${t.description}`.slice(0, 1000),
+      parameters: {
+        type: Type.OBJECT,
+        properties,
+        required,
+      },
+    } as FunctionDeclaration;
+  });
+}
+
+/**
+ * Executes a real Composio tool call by its Gemini-declared name. Returns
+ * the real result (or throws with Composio's real error, e.g. "toolkit
+ * not connected") -- never a fabricated success.
+ */
+export async function callComposioTool(geminiFunctionName: string, args: Record<string, any>): Promise<any> {
+  const realName = nameMap.get(geminiFunctionName);
+  if (!realName) {
+    throw new Error(`Unknown Composio tool: ${geminiFunctionName}`);
+  }
+  const c = await connect();
+  const result = await c.callTool({ name: realName, arguments: args });
+  if (result.isError) {
+    const errText = Array.isArray(result.content)
+      ? result.content.map((c: any) => c.text || '').join('\n')
+      : String(result.content);
+    throw new Error(`Composio tool '${realName}' returned an error: ${errText}`);
+  }
+  return result.content;
+}

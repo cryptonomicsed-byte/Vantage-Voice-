@@ -19,6 +19,13 @@ import {
   startRealOAuth,
   deleteRealConnection,
 } from './src/lib/composioOAuth.js';
+import {
+  initComposioMcp,
+  buildGeminiDeclarationsForComposioTools,
+  isComposioToolName,
+  callComposioTool,
+  getDiscoveredComposioTools,
+} from './src/lib/composioMcp.js';
 
 const VANTAGE_MCP_URL_FOR_DISPLAY = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
 const VANTAGE_BASE_URL = process.env.VANTAGE_BASE_URL || 'https://omokoda.duckdns.org';
@@ -1288,6 +1295,19 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
       return { status: 'error', source: 'vantage_mcp_live', message: err?.message || String(err) };
     }
   }
+  // Real Composio connector tools (COMPOSIO_SEARCH_TOOLS,
+  // COMPOSIO_MANAGE_CONNECTIONS, COMPOSIO_MULTI_EXECUTE_TOOL, etc.) --
+  // these give the model real access to whatever toolkits the owner has
+  // actually connected via the OAuth Integrations modal. An unconnected
+  // toolkit surfaces Composio's own real error, never a fabricated result.
+  if (isComposioToolName(name)) {
+    try {
+      const content = await callComposioTool(name, args);
+      return { status: 'ok', source: 'composio_mcp_live', content };
+    } catch (err: any) {
+      return { status: 'error', source: 'composio_mcp_live', message: err?.message || String(err) };
+    }
+  }
   if (name === 'get_weather') {
     const loc = args.location || 'San Francisco';
     const mockWeathers: Record<string, string> = {
@@ -2506,6 +2526,18 @@ app.delete('/api/oauth/connections/:id', async (req, res) => {
   }
 });
 
+// Re-runs real Composio tool discovery -- called by the client right
+// after a poll detects a new connection went ACTIVE, so the agent's next
+// session picks up the newly-connected toolkit without a server restart.
+app.post('/api/oauth/refresh-tools', async (req, res) => {
+  try {
+    const tools = await initComposioMcp();
+    res.json({ status: 'ok', toolCount: tools.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
 // Tool Execution Endpoint for testing & direct invocation
 app.post('/api/tools/execute', async (req, res) => {
   try {
@@ -3296,6 +3328,17 @@ wss.on('connection', (clientWs: WebSocket) => {
         systemInstruction = `You are Vantage-Voice, a real agent on the Vantage platform (agent id 317) with live access to ${vantageToolCount} real Vantage tools -- trading, wallet, buzz/social, and job/task capabilities, not simulated. When a request needs real data or a real action (prices, balances, posting, trading, checking your own identity, etc.), use tool_search_retrieval to find the right Vantage tool by name, then mcp_server_client with action "call_tool" to actually call it -- don't guess or make up an answer when a real tool can answer it. Speak the real result naturally, don't read out raw JSON.\n\n${systemInstruction}`;
       }
 
+      // Real Composio connector tools -- whatever the owner has actually
+      // connected (Gmail, GitHub, Outlook, Discord, Slack, GitLab, Notion,
+      // Dropbox) via the OAuth Integrations modal. Composio's own
+      // COMPOSIO_SEARCH_TOOLS handles discovery of the specific action
+      // within a connected toolkit, so this just needs to point the model
+      // at the pattern.
+      const composioToolCount = getDiscoveredComposioTools().length;
+      if (composioToolCount > 0) {
+        systemInstruction = `${systemInstruction}\n\nYou also have real connector tools (COMPOSIO_SEARCH_TOOLS, COMPOSIO_MULTI_EXECUTE_TOOL, etc.) for whatever the user has actually connected in OAuth Integrations (Gmail, GitHub, Outlook, Discord, Slack, GitLab, Notion, Dropbox). Use COMPOSIO_SEARCH_TOOLS to find the right action, then execute it for real -- if a toolkit isn't connected yet, the tool will say so honestly; tell the user to connect it in Settings rather than pretending you did it.`;
+      }
+
       // Owner-control tools (API keys, app settings, secure memory) are
       // real and destructive-capable, gated behind unlock_owner_controls
       // (spoken PIN) and, for anything irreversible, an explicit confirmed
@@ -3335,7 +3378,15 @@ wss.on('connection', (clientWs: WebSocket) => {
       }
 
       if (config.enableTools !== false && !isTranslation) {
-        sessionConfig.tools = liveTools;
+        // Composio's real connector tools are declared directly (only 6
+        // Tool Router meta-tools total, unlike Vantage's 663 which need
+        // the indirect search/call pattern) -- built per-session since
+        // discovery can complete after this module first loaded, or after
+        // a new OAuth connection adds a toolkit mid-runtime.
+        const composioDeclarations = buildGeminiDeclarationsForComposioTools();
+        sessionConfig.tools = composioDeclarations.length > 0
+          ? [{ functionDeclarations: [...liveTools[0].functionDeclarations, ...composioDeclarations] }]
+          : liveTools;
       }
 
       liveSession = await client.live.connect({
@@ -3643,6 +3694,16 @@ async function startServer() {
   // live connection" status) rather than block startup or fake success.
   initVantageMcp().catch((err) => {
     console.warn('[VantageMCP] startup discovery failed:', err?.message || err);
+  });
+
+  // Real Composio discovery -- connects to the per-user Tool Router MCP
+  // session and lists its real (small, fixed) meta-tool set. Re-run after
+  // any OAuth connect completes via /api/oauth/refresh-tools, since a
+  // newly-connected toolkit doesn't require a new tool declaration (the
+  // meta-tools stay the same) but does change what COMPOSIO_SEARCH_TOOLS
+  // can actually find and execute.
+  initComposioMcp().catch((err) => {
+    console.warn('[ComposioMCP] startup discovery failed:', err?.message || err);
   });
 }
 

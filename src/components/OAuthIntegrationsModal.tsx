@@ -201,7 +201,10 @@ export const OAuthIntegrationsModal: React.FC<OAuthIntegrationsModalProps> = ({
             if (pollTimer.current) clearInterval(pollTimer.current);
             setConnectingToolkit(null);
             await refreshConnections();
-            setStatusMessage(`Connected to ${toolkitSlug}.`);
+            // Real re-discovery so the voice agent can actually use this
+            // toolkit's tools in its next session, not just show it as connected.
+            fetch('/api/oauth/refresh-tools', { method: 'POST' }).catch(() => {});
+            setStatusMessage(`Connected to ${toolkitSlug} -- the agent can now use it.`);
             setTimeout(() => setStatusMessage(null), 4000);
           }
         } catch {
