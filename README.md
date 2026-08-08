@@ -15,6 +15,7 @@ It enables fluid, low-latency voice conversations where users speak into their m
 - **Gemini API key round-robin pool**: set `GEMINI_API_KEYS` (comma-separated) to spread sessions across multiple keys, with automatic cooldown/retry on a rate-limited key.
 - **Owner-gated agent self-control**: once unlocked with a spoken PIN, the agent can manage this app's own API keys, live app settings, and a real persistent memory vault — every privileged/destructive action is enforced server-side (PIN check + explicit confirmation step), not just prompted.
 - **Installable PWA**: real manifest, service worker, and app icons — works as a home-screen app on mobile and desktop.
+- **Real OAuth connectors** (Composio-backed): Gmail, GitHub, Outlook, Discord, Slack, GitLab, Notion, and Dropbox connect via genuine OAuth redirect + polling for real Composio connection status — no fabricated "connected" state.
 
 ---
 
