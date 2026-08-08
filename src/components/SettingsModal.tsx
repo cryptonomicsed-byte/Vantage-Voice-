@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AppSettings, VoiceName, AgentFramework } from '../types';
 import { AVAILABLE_VOICES, SYSTEM_PERSONAS, TRANSLATION_LANGUAGES } from '../lib/constants';
 import { X, Sparkles, Volume2, Sliders, Globe, Wrench, Shield, Check, Mic, Bot, Terminal, FileText, Cpu, Brain, ShieldCheck, Key, ExternalLink } from 'lucide-react';
-import { OAUTH_PLATFORMS } from './OAuthIntegrationsModal';
+import type { OAuthAccount } from './OAuthIntegrationsModal';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -21,17 +21,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [localSettings, setLocalSettings] = useState<AppSettings>({ ...settings });
   const [activeTab, setActiveTab] = useState<'persona' | 'voice' | 'agent' | 'oauth' | 'translation' | 'audio'>('persona');
-  const [realOAuthStatus, setRealOAuthStatus] = useState<Record<string, string>>({});
+  const [realConnections, setRealConnections] = useState<{ toolkitSlug: string; status: string; createdAt: string }[]>([]);
 
   useEffect(() => {
     if (activeTab !== 'oauth' || !isOpen) return;
     fetch('/api/oauth/connections')
       .then((r) => r.json())
-      .then((data) => {
-        const map: Record<string, string> = {};
-        for (const c of data.connections || []) map[c.toolkitSlug] = c.status;
-        setRealOAuthStatus(map);
-      })
+      .then((data) => setRealConnections(data.connections || []))
       .catch(() => {});
   }, [activeTab, isOpen]);
 
@@ -601,7 +597,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     Multi-Platform OAuth 2.0 Integration Suite
                   </h3>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                    Real OAuth via Composio. Connect Gmail, GitHub, Outlook, Discord, Spotify, Slack, and more to give Sonic AI permissions to execute real tasks on your behalf.
+                    Real OAuth via Composio, with a full searchable router over their ~1000-connector catalog -- Gmail, GitHub, Outlook, Discord, Slack, and hundreds more.
                   </p>
                   {onOpenOAuthModal && (
                     <button
@@ -611,40 +607,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       }}
                       className="mt-3 px-4 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition-all flex items-center gap-1.5 shadow-md shadow-indigo-500/20"
                     >
-                      <ExternalLink className="w-3.5 h-3.5" /> Launch OAuth & Integrations Hub
+                      <ExternalLink className="w-3.5 h-3.5" /> Browse & Connect Connectors
                     </button>
                   )}
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                {OAUTH_PLATFORMS.map((item) => {
-                  const status = realOAuthStatus[item.id];
-                  const isActive = status === 'ACTIVE';
-                  return (
+              {realConnections.length === 0 ? (
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 text-center py-4">
+                  No connectors connected yet -- use "Browse & Connect Connectors" above.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                  {realConnections.map((c) => (
                     <div
-                      key={item.id}
+                      key={c.toolkitSlug}
                       className="p-3.5 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 flex items-center justify-between"
                     >
-                      <div>
-                        <h4 className="text-xs font-bold text-zinc-900 dark:text-zinc-100">{item.name}</h4>
-                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">{item.description}</p>
-                      </div>
+                      <h4 className="text-xs font-bold text-zinc-900 dark:text-zinc-100 capitalize">{c.toolkitSlug}</h4>
                       <span
                         className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full border ${
-                          isActive
+                          c.status === 'ACTIVE'
                             ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-                            : status
-                            ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
-                            : 'bg-zinc-500/10 text-zinc-500 border-zinc-500/20'
+                            : 'bg-amber-500/10 text-amber-500 border-amber-500/20'
                         }`}
                       >
-                        {isActive ? 'Connected' : status || 'Not connected'}
+                        {c.status}
                       </span>
                     </div>
-                  );
-                })}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

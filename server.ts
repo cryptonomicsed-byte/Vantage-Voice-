@@ -18,6 +18,7 @@ import {
   listRealConnections,
   startRealOAuth,
   deleteRealConnection,
+  listAllToolkits,
 } from './src/lib/composioOAuth.js';
 import {
   initComposioMcp,
@@ -2497,6 +2498,31 @@ app.get('/api/oauth/connections', async (req, res) => {
   try {
     const connections = await listRealConnections();
     res.json({ configured: true, connections });
+  } catch (err: any) {
+    res.status(500).json({ configured: true, error: err?.message || String(err) });
+  }
+});
+
+// Real router over Composio's full ~1000-toolkit catalog -- search/browse
+// any connector, not just a hand-picked shortlist. Cached in-memory
+// (see listAllToolkits) since fetching the whole catalog takes ~1s.
+app.get('/api/oauth/toolkits', async (req, res) => {
+  if (!isComposioConfigured()) {
+    return res.json({ configured: false, toolkits: [] });
+  }
+  try {
+    const all = await listAllToolkits();
+    const q = String(req.query.q || '').toLowerCase().trim();
+    const onlyConnectable = req.query.onlyConnectable !== 'false';
+    let filtered = all;
+    if (onlyConnectable) filtered = filtered.filter((t) => t.connectable);
+    if (q) {
+      filtered = filtered.filter(
+        (t) => t.name.toLowerCase().includes(q) || t.slug.toLowerCase().includes(q) || t.category.toLowerCase().includes(q)
+      );
+    }
+    const page = filtered.slice(0, 200);
+    res.json({ configured: true, total: all.length, matched: filtered.length, count: page.length, toolkits: page });
   } catch (err: any) {
     res.status(500).json({ configured: true, error: err?.message || String(err) });
   }

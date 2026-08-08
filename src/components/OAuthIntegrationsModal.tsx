@@ -8,6 +8,8 @@ import {
   RefreshCw,
   Globe,
   AlertCircle,
+  Search,
+  Filter,
 } from 'lucide-react';
 
 export interface OAuthAccount {
@@ -17,103 +19,24 @@ export interface OAuthAccount {
   createdAt: string;
 }
 
+export interface RealToolkit {
+  slug: string;
+  name: string;
+  description: string;
+  logo: string;
+  category: string;
+  toolsCount: number;
+  connectable: boolean;
+}
+
 interface OAuthIntegrationsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-// id === the real Composio toolkit slug passed to session.authorize(id).
-// All slugs below were live-verified against Composio's real catalog.
-// gmail/github/outlook/discord/slack/gitlab/notion/dropbox return a real
-// redirectUrl via Composio-managed OAuth. spotify/twitter exist as real
-// toolkits but Composio doesn't provide managed auth for them -- clicking
-// Connect returns a real error explaining a custom auth config is needed,
-// not a fabricated success.
-export const OAUTH_PLATFORMS = [
-  {
-    id: 'gmail',
-    name: 'Gmail',
-    iconColor: 'bg-red-500/10 text-red-500 border-red-500/20',
-    description: 'Real OAuth via Composio -- read and send email once connected.',
-    category: 'Identity & Productivity',
-    badge: 'Verified',
-  },
-  {
-    id: 'github',
-    name: 'GitHub Developer',
-    iconColor: 'bg-zinc-800 text-white border-zinc-700',
-    description: 'Real OAuth via Composio -- repos, gists, workflow runs, commits.',
-    category: 'Developer & Code',
-    badge: 'Verified',
-  },
-  {
-    id: 'outlook',
-    name: 'Microsoft Outlook',
-    iconColor: 'bg-blue-600/10 text-blue-600 border-blue-600/20',
-    description: 'Real OAuth via Composio -- Outlook mail and calendar.',
-    category: 'Enterprise & Productivity',
-    badge: 'Verified',
-  },
-  {
-    id: 'discord',
-    name: 'Discord Communities',
-    iconColor: 'bg-indigo-600/10 text-indigo-500 border-indigo-600/20',
-    description: 'Real OAuth via Composio -- profile, guild membership, webhooks.',
-    category: 'Communication',
-    badge: 'Verified',
-  },
-  {
-    id: 'spotify',
-    name: 'Spotify Music',
-    iconColor: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
-    description: 'Real toolkit, but Composio has no managed OAuth app for it -- connecting returns a real error asking for a custom auth config.',
-    category: 'Media & Streaming',
-    badge: 'Needs custom auth',
-  },
-  {
-    id: 'slack',
-    name: 'Slack Workspace',
-    iconColor: 'bg-purple-600/10 text-purple-600 border-purple-600/20',
-    description: 'Real OAuth via Composio -- channel notifications, thread reads.',
-    category: 'Communication',
-    badge: 'Verified',
-  },
-  {
-    id: 'gitlab',
-    name: 'GitLab DevOps',
-    iconColor: 'bg-orange-500/10 text-orange-500 border-orange-500/20',
-    description: 'Real OAuth via Composio -- projects, merge requests, pipelines.',
-    category: 'Developer & Code',
-    badge: 'Verified',
-  },
-  {
-    id: 'notion',
-    name: 'Notion',
-    iconColor: 'bg-zinc-700/10 text-zinc-500 border-zinc-500/20',
-    description: 'Real OAuth via Composio -- pages, databases, blocks.',
-    category: 'Productivity',
-    badge: 'Verified',
-  },
-  {
-    id: 'twitter',
-    name: 'X / Twitter Platform',
-    iconColor: 'bg-cyan-500/10 text-cyan-500 border-cyan-500/20',
-    description: 'Real toolkit, but Composio has no managed OAuth app for it -- connecting returns a real error asking for a custom auth config.',
-    category: 'Social Media',
-    badge: 'Needs custom auth',
-  },
-  {
-    id: 'dropbox',
-    name: 'Dropbox Cloud Sync',
-    iconColor: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
-    description: 'Real OAuth via Composio -- file sync and metadata.',
-    category: 'Cloud Storage',
-    badge: 'Verified',
-  },
-];
-
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 90000;
+const SEARCH_DEBOUNCE_MS = 300;
 
 export const OAuthIntegrationsModal: React.FC<OAuthIntegrationsModalProps> = ({
   isOpen,
@@ -126,6 +49,15 @@ export const OAuthIntegrationsModal: React.FC<OAuthIntegrationsModalProps> = ({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Real router over Composio's full catalog (~1000 toolkits).
+  const [search, setSearch] = useState('');
+  const [showAll, setShowAll] = useState(false); // false = only ones with one-click OAuth
+  const [toolkits, setToolkits] = useState<RealToolkit[]>([]);
+  const [totalCatalogSize, setTotalCatalogSize] = useState<number | null>(null);
+  const [matchedCount, setMatchedCount] = useState<number | null>(null);
+  const [loadingToolkits, setLoadingToolkits] = useState(false);
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const refreshConnections = async () => {
     try {
       const res = await fetch('/api/oauth/connections');
@@ -137,7 +69,6 @@ export const OAuthIntegrationsModal: React.FC<OAuthIntegrationsModalProps> = ({
       }
       const map: Record<string, OAuthAccount> = {};
       for (const c of data.connections || []) {
-        // toolkit slug -> alias is "vantage-voice-<slug>", one connection per toolkit
         map[c.toolkitSlug] = {
           connectionId: c.id,
           toolkitSlug: c.toolkitSlug,
@@ -151,12 +82,41 @@ export const OAuthIntegrationsModal: React.FC<OAuthIntegrationsModalProps> = ({
     }
   };
 
+  const fetchToolkits = async (q: string, onlyConnectable: boolean) => {
+    setLoadingToolkits(true);
+    try {
+      const params = new URLSearchParams({ q, onlyConnectable: String(onlyConnectable) });
+      const res = await fetch(`/api/oauth/toolkits?${params.toString()}`);
+      const data = await res.json();
+      setToolkits(data.toolkits || []);
+      setTotalCatalogSize(data.total ?? null);
+      setMatchedCount(data.matched ?? null);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to load connector catalog');
+    } finally {
+      setLoadingToolkits(false);
+    }
+  };
+
   useEffect(() => {
-    if (isOpen) refreshConnections();
+    if (!isOpen) return;
+    refreshConnections();
+    fetchToolkits('', !showAll);
     return () => {
       if (pollTimer.current) clearInterval(pollTimer.current);
     };
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    searchDebounce.current = setTimeout(() => {
+      fetchToolkits(search, !showAll);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    };
+  }, [search, showAll, isOpen]);
 
   if (!isOpen) return null;
 
@@ -260,7 +220,7 @@ export const OAuthIntegrationsModal: React.FC<OAuthIntegrationsModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Real OAuth via Composio -- genuine popup consent flows, no simulated connections.
+                {totalCatalogSize ? `Real router over Composio's full ${totalCatalogSize}-connector catalog.` : 'Real OAuth via Composio.'}
               </p>
             </div>
           </div>
@@ -271,6 +231,37 @@ export const OAuthIntegrationsModal: React.FC<OAuthIntegrationsModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Search + Filter Bar */}
+        <div className="px-5 pt-4 flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search any connector -- Salesforce, Jira, Airtable, Trello..."
+              className="w-full pl-9 pr-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <button
+            onClick={() => setShowAll((prev) => !prev)}
+            className={`px-3 py-2 rounded-xl text-xs font-semibold border flex items-center gap-1.5 transition-all whitespace-nowrap ${
+              showAll
+                ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-600 dark:text-indigo-400'
+                : 'bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300'
+            }`}
+            title="Toggle showing connectors that need a custom auth config"
+          >
+            <Filter className="w-3.5 h-3.5" />
+            {showAll ? 'Showing all' : 'One-click only'}
+          </button>
+        </div>
+        {matchedCount !== null && matchedCount > toolkits.length && (
+          <p className="px-5 pt-1.5 text-[11px] text-zinc-400">
+            Showing {toolkits.length} of {matchedCount} matches -- type to narrow the search.
+          </p>
+        )}
 
         {/* Not configured banner */}
         {composioConfigured === false && (
@@ -308,17 +299,29 @@ export const OAuthIntegrationsModal: React.FC<OAuthIntegrationsModalProps> = ({
 
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
-          {/* Platforms Grid */}
+          {loadingToolkits && toolkits.length === 0 && (
+            <div className="flex items-center justify-center py-10 text-zinc-400 text-xs gap-2">
+              <RefreshCw className="w-4 h-4 animate-spin" /> Loading real connector catalog...
+            </div>
+          )}
+
+          {!loadingToolkits && toolkits.length === 0 && (
+            <div className="text-center py-10 text-zinc-400 text-xs">
+              No connectors match "{search}". Try "{showAll ? 'a different term' : 'showing all, not just one-click'}".
+            </div>
+          )}
+
+          {/* Connectors Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {OAUTH_PLATFORMS.map((platform) => {
-              const account = connectedAccounts[platform.id];
+            {toolkits.map((toolkit) => {
+              const account = connectedAccounts[toolkit.slug];
               const isConnected = Boolean(account && account.status === 'ACTIVE');
               const isPending = Boolean(account && account.status !== 'ACTIVE');
-              const isConnecting = connectingToolkit === platform.id;
+              const isConnecting = connectingToolkit === toolkit.slug;
 
               return (
                 <div
-                  key={platform.id}
+                  key={toolkit.slug}
                   className={`p-4 rounded-2xl border transition-all flex flex-col justify-between ${
                     isConnected
                       ? 'border-emerald-500/40 bg-emerald-500/5 dark:bg-emerald-950/10 shadow-sm'
@@ -328,35 +331,34 @@ export const OAuthIntegrationsModal: React.FC<OAuthIntegrationsModalProps> = ({
                   <div>
                     {/* Header line */}
                     <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`px-2.5 py-1 rounded-xl text-xs font-bold border ${platform.iconColor}`}
-                        >
-                          {platform.name.split(' ')[0]}
-                        </span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-medium">
-                          {platform.badge}
+                      <div className="flex items-center gap-2 min-w-0">
+                        {toolkit.logo ? (
+                          <img src={toolkit.logo} alt="" className="w-5 h-5 rounded shrink-0" />
+                        ) : null}
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-medium truncate">
+                          {toolkit.category}
                         </span>
                       </div>
                       {isConnected ? (
-                        <span className="flex items-center gap-1 text-xs font-bold text-emerald-500">
+                        <span className="flex items-center gap-1 text-xs font-bold text-emerald-500 shrink-0">
                           <CheckCircle2 className="w-3.5 h-3.5" /> Connected
                         </span>
                       ) : isPending ? (
-                        <span className="text-[11px] text-amber-500 font-mono">{account?.status}</span>
+                        <span className="text-[11px] text-amber-500 font-mono shrink-0">{account?.status}</span>
+                      ) : !toolkit.connectable ? (
+                        <span className="text-[10px] text-amber-500 font-mono shrink-0">Needs custom auth</span>
                       ) : (
-                        <span className="text-[11px] text-zinc-400 font-mono">Composio OAuth</span>
+                        <span className="text-[11px] text-zinc-400 font-mono shrink-0">Composio OAuth</span>
                       )}
                     </div>
 
                     <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                      {platform.name}
+                      {toolkit.name}
                     </h3>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 line-clamp-2">
-                      {platform.description}
+                      {toolkit.description || `${toolkit.toolsCount} tools available.`}
                     </p>
 
-                    {/* Connected Account Details */}
                     {isConnected && account && (
                       <div className="mt-3 p-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-emerald-500/20 flex items-center justify-between gap-2.5">
                         <span className="text-[10px] text-zinc-500 font-mono truncate">{account.connectionId}</span>
@@ -371,14 +373,14 @@ export const OAuthIntegrationsModal: React.FC<OAuthIntegrationsModalProps> = ({
                   <div className="mt-4 pt-3 border-t border-zinc-200/60 dark:border-zinc-800 flex items-center justify-end gap-2">
                     {isConnected ? (
                       <button
-                        onClick={() => handleDisconnect(platform.id)}
+                        onClick={() => handleDisconnect(toolkit.slug)}
                         className="px-3 py-1.5 rounded-xl text-xs font-semibold text-rose-500 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all flex items-center gap-1"
                       >
                         <LogOut className="w-3.5 h-3.5" /> Disconnect
                       </button>
                     ) : (
                       <button
-                        onClick={() => handleInitiateOAuth(platform.id)}
+                        onClick={() => handleInitiateOAuth(toolkit.slug)}
                         disabled={isConnecting || composioConfigured === false}
                         className="px-4 py-1.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 shadow-md shadow-indigo-500/20 transition-all flex items-center gap-1.5 disabled:opacity-50"
                       >

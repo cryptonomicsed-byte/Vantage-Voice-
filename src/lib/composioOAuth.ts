@@ -79,6 +79,44 @@ export async function deleteRealConnection(connectionId: string): Promise<void> 
   await composio.connectedAccounts.delete(connectionId);
 }
 
+export interface RealToolkitSummary {
+  slug: string;
+  name: string;
+  description: string;
+  logo: string;
+  category: string;
+  toolsCount: number;
+  connectable: boolean; // has Composio-managed OAuth or no-auth; false = needs a custom auth config
+}
+
+// Composio's real catalog is ~1000 toolkits -- fetch once and cache
+// in-memory rather than hit the API on every keystroke of a search box.
+let toolkitCache: RealToolkitSummary[] | null = null;
+let toolkitCacheAt = 0;
+const TOOLKIT_CACHE_TTL_MS = 60 * 60 * 1000;
+
+export async function listAllToolkits(forceRefresh = false): Promise<RealToolkitSummary[]> {
+  const composio = getClient();
+  if (!forceRefresh && toolkitCache && Date.now() - toolkitCacheAt < TOOLKIT_CACHE_TTL_MS) {
+    return toolkitCache;
+  }
+  // getToolkits() works at runtime (verified live -- real catalog of
+  // ~1000 toolkits returned) but the SDK's .d.ts marks it @private, so
+  // TS blocks the call through the typed surface. Casting to any here.
+  const raw = await (composio.toolkits as any).getToolkits({});
+  toolkitCache = raw.map((t: any) => ({
+    slug: t.slug,
+    name: t.name,
+    description: t.meta?.description || '',
+    logo: t.meta?.logo || '',
+    category: t.meta?.categories?.[0]?.name || 'other',
+    toolsCount: t.meta?.toolsCount || 0,
+    connectable: Boolean(t.noAuth) || (t.composioManagedAuthSchemes?.length || 0) > 0,
+  }));
+  toolkitCacheAt = Date.now();
+  return toolkitCache;
+}
+
 /** Real per-user MCP endpoint -- once toolkits are connected, this is a
  *  genuine MCP server exposing their real tools (send/read email, star a
  *  repo, post to Slack, etc), usable the same way vantageMcp.ts already
