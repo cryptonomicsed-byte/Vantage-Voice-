@@ -13,6 +13,12 @@ import {
   getDiscoveredTools,
   toGeminiFunctionName,
 } from './src/lib/vantageMcp.js';
+import {
+  isComposioConfigured,
+  listRealConnections,
+  startRealOAuth,
+  deleteRealConnection,
+} from './src/lib/composioOAuth.js';
 
 const VANTAGE_MCP_URL_FOR_DISPLAY = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
 const VANTAGE_BASE_URL = process.env.VANTAGE_BASE_URL || 'https://omokoda.duckdns.org';
@@ -2457,6 +2463,47 @@ app.get('/api/health', (req, res) => {
     hasApiKey: hasKey,
     timestamp: new Date().toISOString(),
   });
+});
+
+// ── Real OAuth connector routes (Composio-backed) ──
+// Replaces the old fake /api/auth/:provider/login (never existed) that
+// OAuthIntegrationsModal.tsx's fallback timer papered over with a
+// fabricated "connected" state after 2 seconds regardless of what
+// actually happened.
+app.get('/api/oauth/connections', async (req, res) => {
+  if (!isComposioConfigured()) {
+    return res.json({ configured: false, connections: [] });
+  }
+  try {
+    const connections = await listRealConnections();
+    res.json({ configured: true, connections });
+  } catch (err: any) {
+    res.status(500).json({ configured: true, error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/oauth/:toolkit/connect', async (req, res) => {
+  if (!isComposioConfigured()) {
+    return res.status(400).json({ error: 'COMPOSIO_API_KEY is not set on the server' });
+  }
+  try {
+    const { redirectUrl, connectionId } = await startRealOAuth(req.params.toolkit);
+    res.json({ redirectUrl, connectionId });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.delete('/api/oauth/connections/:id', async (req, res) => {
+  if (!isComposioConfigured()) {
+    return res.status(400).json({ error: 'COMPOSIO_API_KEY is not set on the server' });
+  }
+  try {
+    await deleteRealConnection(req.params.id);
+    res.json({ status: 'ok' });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
 });
 
 // Tool Execution Endpoint for testing & direct invocation

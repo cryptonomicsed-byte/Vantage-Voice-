@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AppSettings, VoiceName, AgentFramework } from '../types';
 import { AVAILABLE_VOICES, SYSTEM_PERSONAS, TRANSLATION_LANGUAGES } from '../lib/constants';
 import { X, Sparkles, Volume2, Sliders, Globe, Wrench, Shield, Check, Mic, Bot, Terminal, FileText, Cpu, Brain, ShieldCheck, Key, ExternalLink } from 'lucide-react';
+import { OAUTH_PLATFORMS } from './OAuthIntegrationsModal';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -20,6 +21,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [localSettings, setLocalSettings] = useState<AppSettings>({ ...settings });
   const [activeTab, setActiveTab] = useState<'persona' | 'voice' | 'agent' | 'oauth' | 'translation' | 'audio'>('persona');
+  const [realOAuthStatus, setRealOAuthStatus] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (activeTab !== 'oauth' || !isOpen) return;
+    fetch('/api/oauth/connections')
+      .then((r) => r.json())
+      .then((data) => {
+        const map: Record<string, string> = {};
+        for (const c of data.connections || []) map[c.toolkitSlug] = c.status;
+        setRealOAuthStatus(map);
+      })
+      .catch(() => {});
+  }, [activeTab, isOpen]);
 
   if (!isOpen) return null;
 
@@ -587,7 +601,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     Multi-Platform OAuth 2.0 Integration Suite
                   </h3>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                    Connect Google, GitHub, Microsoft, Discord, Spotify, Slack, and other platforms to give Sonic AI permissions to execute user tasks on your behalf.
+                    Real OAuth via Composio. Connect Gmail, GitHub, Outlook, Discord, Spotify, Slack, and more to give Sonic AI permissions to execute real tasks on your behalf.
                   </p>
                   {onOpenOAuthModal && (
                     <button
@@ -604,27 +618,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                {[
-                  { name: 'Google Account', scopes: 'Profile, Email, Gmail, Calendar', status: 'OAuth Ready' },
-                  { name: 'GitHub Developer', scopes: 'User, Repo, Gists, Workflows', status: 'OAuth Ready' },
-                  { name: 'Microsoft 365', scopes: 'Outlook, OneDrive, Teams', status: 'OAuth Ready' },
-                  { name: 'Discord', scopes: 'User, Guilds, Webhooks', status: 'OAuth Ready' },
-                  { name: 'Spotify Music', scopes: 'Playback, Currently Playing, Playlists', status: 'OAuth Ready' },
-                  { name: 'Slack Workspace', scopes: 'Channels, Chat Write, Read', status: 'OAuth Ready' },
-                ].map((item) => (
-                  <div
-                    key={item.name}
-                    className="p-3.5 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 flex items-center justify-between"
-                  >
-                    <div>
-                      <h4 className="text-xs font-bold text-zinc-900 dark:text-zinc-100">{item.name}</h4>
-                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">{item.scopes}</p>
+                {OAUTH_PLATFORMS.map((item) => {
+                  const status = realOAuthStatus[item.id];
+                  const isActive = status === 'ACTIVE';
+                  return (
+                    <div
+                      key={item.id}
+                      className="p-3.5 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 flex items-center justify-between"
+                    >
+                      <div>
+                        <h4 className="text-xs font-bold text-zinc-900 dark:text-zinc-100">{item.name}</h4>
+                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">{item.description}</p>
+                      </div>
+                      <span
+                        className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full border ${
+                          isActive
+                            ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                            : status
+                            ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                            : 'bg-zinc-500/10 text-zinc-500 border-zinc-500/20'
+                        }`}
+                      >
+                        {isActive ? 'Connected' : status || 'Not connected'}
+                      </span>
                     </div>
-                    <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                      {item.status}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
