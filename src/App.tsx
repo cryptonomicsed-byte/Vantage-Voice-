@@ -39,6 +39,7 @@ import { AlertCircle, RefreshCw, Zap, Sparkles, X } from 'lucide-react';
 
 const STORAGE_KEY_TRANSCRIPTS = 'sonic_live_transcript_history';
 const STORAGE_KEY_MEMORIES = 'sonic_live_memory_vault';
+const STORAGE_KEY_SETTINGS = 'sonic_live_app_settings';
 
 const DEFAULT_MEMORIES: MemoryItem[] = [
   {
@@ -85,7 +86,14 @@ const DEFAULT_MEMORIES: MemoryItem[] = [
 
 export default function App() {
   // App Configuration & Settings
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SETTINGS);
+      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+    } catch {
+      return DEFAULT_SETTINGS;
+    }
+  });
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [conversationState, setConversationState] = useState<ConversationState>('idle');
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -288,6 +296,13 @@ export default function App() {
       document.documentElement.classList.remove('dark');
     }
   }, [settings.theme]);
+
+  // Auto-Save App Settings to localStorage (including live agent-applied changes)
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
+    } catch (e) {}
+  }, [settings]);
 
   // Auto-Save Transcripts to localStorage
   useEffect(() => {
@@ -754,6 +769,23 @@ export default function App() {
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             },
           ]);
+        } else if (msg.type === 'apply_setting') {
+          const settingName = msg.toolName as keyof AppSettings;
+          const raw = msg.text ?? '';
+          let coerced: any = raw;
+          if (raw === 'true') coerced = true;
+          else if (raw === 'false') coerced = false;
+          else if (raw !== '' && !isNaN(Number(raw))) coerced = Number(raw);
+
+          setSettings((prev) => {
+            if (!(settingName in prev)) {
+              console.warn(`[apply_setting] Unknown setting "${settingName}", ignoring.`);
+              return prev;
+            }
+            return { ...prev, [settingName]: coerced };
+          });
+
+          triggerToast('⚙️ Setting Updated', `Agent changed "${settingName}" to "${raw}"`);
         } else if (msg.type === 'error') {
           console.error('[S2S Error]:', msg.error);
           setErrorMessage(msg.error);

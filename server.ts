@@ -79,11 +79,99 @@ function sendToClient(ws: WebSocket, payload: any) {
   }
 }
 
+// ── Owner-control layer: real .env credential management + real
+// persistent memory vault, both gated behind a spoken PIN and, for
+// destructive actions, an explicit confirmation step. This exists
+// because the voice app is reachable at a public URL with no login --
+// these tools give real read/write power over the app's own secrets and
+// settings, so every entry point is hard-gated in code, not just told to
+// the model in a prompt (a misheard word or adversarial audio shouldn't
+// be able to talk its way past a system instruction alone).
+import fs from 'fs';
+
+const ENV_PATH = path.join(process.cwd(), '.env');
+const MEMORY_VAULT_PATH = path.join(process.cwd(), 'data', 'memory-vault.json');
+const MANAGED_ENV_KEYS = [
+  'GEMINI_API_KEY',
+  'GEMINI_API_KEYS',
+  'HERMES_AGENT_KEY',
+  'OPENCLAW_AGENT_KEY',
+  'VANTAGE_AGENT_KEY',
+  'VANTAGE_MCP_URL',
+  'VANTAGE_BASE_URL',
+];
+// OWNER_VOICE_PIN is deliberately excluded from MANAGED_ENV_KEYS -- the
+// agent must never be able to read, change, or clear its own access gate.
+
+function readEnvFileLines(): string[] {
+  try {
+    return fs.readFileSync(ENV_PATH, 'utf-8').split('\n');
+  } catch {
+    return [];
+  }
+}
+
+function setEnvVar(key: string, value: string) {
+  const lines = readEnvFileLines();
+  const prefix = `${key}=`;
+  const quoted = `${key}="${value.replace(/"/g, '\\"')}"`;
+  let found = false;
+  const next = lines.map((line) => {
+    if (line.startsWith(prefix)) {
+      found = true;
+      return quoted;
+    }
+    return line;
+  });
+  if (!found) next.push(quoted);
+  fs.writeFileSync(ENV_PATH, next.filter((l, i, arr) => l !== '' || i !== arr.length - 1).join('\n') + '\n');
+  process.env[key] = value;
+}
+
+function removeEnvVar(key: string) {
+  const lines = readEnvFileLines();
+  const next = lines.filter((line) => !line.startsWith(`${key}=`));
+  fs.writeFileSync(ENV_PATH, next.filter((l, i, arr) => l !== '' || i !== arr.length - 1).join('\n') + '\n');
+  delete process.env[key];
+}
+
+function maskSecret(value: string): string {
+  if (!value) return '(unset)';
+  if (value.length <= 8) return '****';
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+interface MemoryVaultItem {
+  id: string;
+  key: string;
+  value: string;
+  category: string;
+  tier: 'secure' | 'personal' | 'regular';
+  tags: string[];
+  updatedAt: string;
+}
+
+function loadMemoryVault(): MemoryVaultItem[] {
+  try {
+    return JSON.parse(fs.readFileSync(MEMORY_VAULT_PATH, 'utf-8'));
+  } catch {
+    return [];
+  }
+}
+
+function saveMemoryVault(items: MemoryVaultItem[]) {
+  fs.mkdirSync(path.dirname(MEMORY_VAULT_PATH), { recursive: true });
+  fs.writeFileSync(MEMORY_VAULT_PATH, JSON.stringify(items, null, 2));
+}
+
 // Round-robin pool of Gemini API keys. Set GEMINI_API_KEYS as a
 // comma-separated list to spread load/rate-limits across multiple keys;
 // falls back to the single GEMINI_API_KEY/API_KEY var if unset, so nothing
 // changes for anyone with just one key.
-const GEMINI_API_KEYS: string[] = (() => {
+// Re-read from process.env on every call (not a frozen const) -- so a key
+// added live via the owner-control voice tools takes effect immediately,
+// no restart needed.
+function getGeminiKeyPool(): string[] {
   const multi = (process.env.GEMINI_API_KEYS || '')
     .split(',')
     .map((k) => k.trim())
@@ -91,7 +179,7 @@ const GEMINI_API_KEYS: string[] = (() => {
   if (multi.length > 0) return multi;
   const single = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
   return single.length > 5 ? [single] : [];
-})();
+}
 
 let rrIndex = 0;
 // Keys that recently failed (e.g. 429 rate-limited) are skipped for a
@@ -105,10 +193,11 @@ export function markGeminiKeyRateLimited(apiKey: string) {
 }
 
 function pickNextGeminiKey(): string {
-  if (GEMINI_API_KEYS.length === 0) return '';
+  const pool = getGeminiKeyPool();
+  if (pool.length === 0) return '';
   const now = Date.now();
-  for (let i = 0; i < GEMINI_API_KEYS.length; i++) {
-    const key = GEMINI_API_KEYS[rrIndex % GEMINI_API_KEYS.length];
+  for (let i = 0; i < pool.length; i++) {
+    const key = pool[rrIndex % pool.length];
     rrIndex++;
     const cooldown = keyCooldownUntil.get(key);
     if (!cooldown || cooldown <= now) {
@@ -117,7 +206,7 @@ function pickNextGeminiKey(): string {
   }
   // All keys are cooling down -- use the next one in rotation anyway
   // rather than failing outright.
-  return GEMINI_API_KEYS[rrIndex % GEMINI_API_KEYS.length];
+  return pool[rrIndex % pool.length];
 }
 
 // Get a GoogleGenAI instance using the next key in the round-robin pool.
@@ -127,7 +216,7 @@ function getAiClient() {
     client: new GoogleGenAI({ apiKey }),
     apiKey,
     hasKey: Boolean(apiKey && apiKey.length > 5),
-    poolSize: GEMINI_API_KEYS.length,
+    poolSize: getGeminiKeyPool().length,
   };
 }
 
@@ -988,6 +1077,64 @@ const hermesReasoningStepDeclaration: FunctionDeclaration = {
   },
 };
 
+const unlockOwnerControlsDeclaration: FunctionDeclaration = {
+  name: 'unlock_owner_controls',
+  description: 'Unlock owner-level control of this app for the rest of the session -- required before any API key management, settings change, or memory vault write. Call this only when the user speaks or types their owner PIN.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      pin: { type: Type.STRING, description: 'The owner PIN spoken or typed by the user' },
+    },
+    required: ['pin'],
+  },
+};
+
+const listApiKeysDeclaration: FunctionDeclaration = {
+  name: 'list_api_keys',
+  description: 'List the app\'s currently configured API keys/credentials by name, with masked values (never full plaintext). Requires owner unlock.',
+  parameters: { type: Type.OBJECT, properties: {} },
+};
+
+const setApiKeyDeclaration: FunctionDeclaration = {
+  name: 'set_api_key',
+  description: 'Add or update a real API key/credential for this app (e.g. GEMINI_API_KEY, GEMINI_API_KEYS, HERMES_AGENT_KEY, OPENCLAW_AGENT_KEY, VANTAGE_AGENT_KEY). Takes effect immediately, no restart. Requires owner unlock. If a key with this name already exists, requires confirmed=true (ask the user to confirm the overwrite first).',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      name: { type: Type.STRING, description: 'Env var name, must be one of the managed keys' },
+      value: { type: Type.STRING, description: 'The real key/credential value' },
+      confirmed: { type: Type.BOOLEAN, description: 'Set true only after the user has explicitly confirmed overwriting an existing key' },
+    },
+    required: ['name', 'value'],
+  },
+};
+
+const removeApiKeyDeclaration: FunctionDeclaration = {
+  name: 'remove_api_key',
+  description: 'Permanently remove a configured API key/credential. Destructive -- requires owner unlock AND confirmed=true (ask the user to explicitly confirm first, this cannot be undone).',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      name: { type: Type.STRING, description: 'Env var name to remove' },
+      confirmed: { type: Type.BOOLEAN, description: 'Must be true; only set after explicit user confirmation' },
+    },
+    required: ['name', 'confirmed'],
+  },
+};
+
+const updateAppSettingDeclaration: FunctionDeclaration = {
+  name: 'update_app_setting',
+  description: 'Change one of this voice app\'s own settings live (e.g. voice, agentFramework, playbackSpeed, enableTools, personaId, vadSensitivity). Requires owner unlock. Applies immediately in this session and persists to the browser.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      setting: { type: Type.STRING, description: 'Name of the AppSettings field to change' },
+      value: { type: Type.STRING, description: 'New value (as a string; booleans/numbers are parsed automatically)' },
+    },
+    required: ['setting', 'value'],
+  },
+};
+
 const queryMemoryVaultDeclaration: FunctionDeclaration = {
   name: 'query_memory_vault',
   description: 'Query or search the user memory vault across security tiers (secure, personal, regular) for remembered information.',
@@ -1078,12 +1225,23 @@ const liveTools = [
       hermesReasoningStepDeclaration,
       queryMemoryVaultDeclaration,
       storeMemoryVaultDeclaration,
+      unlockOwnerControlsDeclaration,
+      listApiKeysDeclaration,
+      setApiKeyDeclaration,
+      removeApiKeyDeclaration,
+      updateAppSettingDeclaration,
     ],
   },
 ];
 
 // Execute server-side tool functions
-async function executeToolCall(name: string, args: any) {
+interface ToolCtx {
+  ownerUnlocked: boolean;
+  unlockOwner: () => void;
+  applySettingOnClient?: (setting: string, value: string) => void;
+}
+
+async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
   console.log(`[Tool Call] Executing tool '${name}' with args:`, args);
 
   // Real, first-class Vantage MCP tools (vantage__<realname>) -- these are
@@ -2164,41 +2322,103 @@ All DOM nodes have been parsed cleanly. Semantic headers (h1, h2, h3) and main a
     };
   }
 
+  // Real, file-persisted memory vault -- replaces the previous hardcoded
+  // fabricated entries. 'secure' tier reads/writes require owner unlock.
   if (name === 'query_memory_vault') {
     const query = (args.searchQuery || '').toLowerCase();
     const tier = args.tier;
-    return {
-      status: 'memory_searched',
-      searchQuery: args.searchQuery,
-      tierFilter: tier || 'all',
-      matchedEntries: [
-        { key: 'User Name', value: 'Alex', category: 'Identity', tier: 'personal' },
-        { key: 'Preferred Assistant Voice', value: 'Zephyr', category: 'Preferences', tier: 'personal' },
-        { key: 'Primary Security Passcode', value: 'VAULT-7789-ALPHA', category: 'Auth', tier: 'secure' },
-        { key: 'Project Focus Goal', value: 'High quality real-time voice streaming agent', category: 'Goals', tier: 'regular' },
-      ].filter((m) => {
-        const matchesTier = !tier || m.tier === tier;
-        const matchesQ = !query || m.key.toLowerCase().includes(query) || m.value.toLowerCase().includes(query) || m.category.toLowerCase().includes(query);
-        return matchesTier && matchesQ;
-      }),
-    };
+    if (tier === 'secure' && !ctx.ownerUnlocked) {
+      return { status: 'owner_unlock_required', message: 'Secure-tier memory requires owner unlock first.' };
+    }
+    const items = loadMemoryVault().filter((m) => {
+      if (m.tier === 'secure' && !ctx.ownerUnlocked) return false;
+      const matchesTier = !tier || m.tier === tier;
+      const matchesQ = !query || m.key.toLowerCase().includes(query) || m.value.toLowerCase().includes(query) || m.category.toLowerCase().includes(query);
+      return matchesTier && matchesQ;
+    });
+    return { status: 'memory_searched', searchQuery: args.searchQuery, tierFilter: tier || 'all', matchedEntries: items };
   }
 
   if (name === 'store_memory_vault') {
     const { key, value, category = 'General', tier = 'regular', tags = '' } = args;
-    return {
-      status: 'memory_saved',
-      savedItem: {
-        id: `mem-${Date.now()}`,
-        key,
-        value,
-        category,
-        tier,
-        tags: typeof tags === 'string' ? tags.split(',').map((t: string) => t.trim()) : tags,
-        updatedAt: new Date().toISOString(),
-      },
-      message: `Successfully remembered "${key}" in ${tier.toUpperCase()} memory tier.`,
+    if (tier === 'secure' && !ctx.ownerUnlocked) {
+      return { status: 'owner_unlock_required', message: 'Storing to the secure tier requires owner unlock first.' };
+    }
+    const items = loadMemoryVault();
+    const existing = items.find((i) => i.key === key && i.tier === tier);
+    if (existing && !args.confirmed) {
+      return { status: 'confirmation_required', message: `A memory item named "${key}" already exists in ${tier} tier. Ask the user to confirm overwriting it, then call again with confirmed=true.` };
+    }
+    const item: MemoryVaultItem = {
+      id: existing?.id || `mem-${Date.now()}`,
+      key,
+      value,
+      category,
+      tier,
+      tags: typeof tags === 'string' ? tags.split(',').map((t: string) => t.trim()).filter(Boolean) : tags,
+      updatedAt: new Date().toISOString(),
     };
+    const next = existing ? items.map((i) => (i.id === existing.id ? item : i)) : [...items, item];
+    saveMemoryVault(next);
+    return { status: 'memory_saved', savedItem: item, message: `Remembered "${key}" in ${tier.toUpperCase()} memory tier.` };
+  }
+
+  // ── Owner-control tools ──
+  if (name === 'unlock_owner_controls') {
+    const pin = String(args.pin || '').trim();
+    const realPin = process.env.OWNER_VOICE_PIN || '';
+    if (!realPin) {
+      return { status: 'error', message: 'No owner PIN is configured on this server.' };
+    }
+    if (pin !== realPin) {
+      return { status: 'denied', message: 'Incorrect PIN.' };
+    }
+    ctx.unlockOwner();
+    return { status: 'unlocked', message: 'Owner controls unlocked for this session.' };
+  }
+
+  if (name === 'list_api_keys') {
+    if (!ctx.ownerUnlocked) return { status: 'owner_unlock_required', message: 'Say the owner PIN first to unlock this.' };
+    return {
+      status: 'ok',
+      keys: MANAGED_ENV_KEYS.map((k) => ({ name: k, value: maskSecret(process.env[k] || '') })),
+    };
+  }
+
+  if (name === 'set_api_key') {
+    if (!ctx.ownerUnlocked) return { status: 'owner_unlock_required', message: 'Say the owner PIN first to unlock this.' };
+    const keyName = String(args.name || '').toUpperCase();
+    if (!MANAGED_ENV_KEYS.includes(keyName)) {
+      return { status: 'error', message: `"${keyName}" isn't a managed key. Valid names: ${MANAGED_ENV_KEYS.join(', ')}` };
+    }
+    const exists = Boolean(process.env[keyName]);
+    if (exists && !args.confirmed) {
+      return { status: 'confirmation_required', message: `${keyName} is already set. Ask the user to confirm overwriting it, then call again with confirmed=true.` };
+    }
+    setEnvVar(keyName, String(args.value || ''));
+    return { status: 'ok', message: `${keyName} ${exists ? 'updated' : 'added'}. Takes effect immediately.` };
+  }
+
+  if (name === 'remove_api_key') {
+    if (!ctx.ownerUnlocked) return { status: 'owner_unlock_required', message: 'Say the owner PIN first to unlock this.' };
+    const keyName = String(args.name || '').toUpperCase();
+    if (!MANAGED_ENV_KEYS.includes(keyName)) {
+      return { status: 'error', message: `"${keyName}" isn't a managed key.` };
+    }
+    if (!args.confirmed) {
+      return { status: 'confirmation_required', message: `Removing ${keyName} cannot be undone. Ask the user to explicitly confirm, then call again with confirmed=true.` };
+    }
+    removeEnvVar(keyName);
+    return { status: 'ok', message: `${keyName} removed.` };
+  }
+
+  if (name === 'update_app_setting') {
+    if (!ctx.ownerUnlocked) return { status: 'owner_unlock_required', message: 'Say the owner PIN first to unlock this.' };
+    if (!ctx.applySettingOnClient) {
+      return { status: 'error', message: 'No active client session to apply this setting to.' };
+    }
+    ctx.applySettingOnClient(String(args.setting || ''), String(args.value ?? ''));
+    return { status: 'ok', message: `Setting "${args.setting}" updated.` };
   }
 
   return { status: 'executed', result: 'Tool completed successfully' };
@@ -2221,7 +2441,15 @@ app.post('/api/tools/execute', async (req, res) => {
     if (!name) {
       return res.status(400).json({ error: 'Tool name is required' });
     }
-    const result = await executeToolCall(name, args || {});
+    // Stateless HTTP call -- owner unlock doesn't persist here, must pass
+    // the PIN directly in the body each time (req.body.pin), same real
+    // gate as the voice path.
+    const suppliedPin = String(req.body?.pin || '');
+    const isOwner = Boolean(process.env.OWNER_VOICE_PIN) && suppliedPin === process.env.OWNER_VOICE_PIN;
+    const result = await executeToolCall(name, args || {}, {
+      ownerUnlocked: isOwner,
+      unlockOwner: () => {},
+    });
     return res.json({
       success: true,
       toolName: name,
@@ -2946,6 +3174,7 @@ wss.on('connection', (clientWs: WebSocket) => {
   let activeFramework: string = 'native';
   let activeHermesKey = '';
   let activeOpenClawKey = '';
+  let ownerUnlocked = false; // per-connection only, never persisted, resets every new session
 
   clientWs.on('error', (err: any) => {
     console.warn('[WebSocket] Client socket error (handled):', err?.message || err);
@@ -2994,6 +3223,12 @@ wss.on('connection', (clientWs: WebSocket) => {
       if (vantageToolCount > 0) {
         systemInstruction = `You are Vantage-Voice, a real agent on the Vantage platform (agent id 317) with live access to ${vantageToolCount} real Vantage tools -- trading, wallet, buzz/social, and job/task capabilities, not simulated. When a request needs real data or a real action (prices, balances, posting, trading, checking your own identity, etc.), use tool_search_retrieval to find the right Vantage tool by name, then mcp_server_client with action "call_tool" to actually call it -- don't guess or make up an answer when a real tool can answer it. Speak the real result naturally, don't read out raw JSON.\n\n${systemInstruction}`;
       }
+
+      // Owner-control tools (API keys, app settings, secure memory) are
+      // real and destructive-capable, gated behind unlock_owner_controls
+      // (spoken PIN) and, for anything irreversible, an explicit confirmed
+      // flag -- both enforced server-side, not just by this instruction.
+      systemInstruction = `${systemInstruction}\n\nOwner controls: you have list_api_keys, set_api_key, remove_api_key, update_app_setting, and secure-tier memory vault access -- but ALL of them are locked until the user speaks or types their owner PIN and you call unlock_owner_controls(pin). Never guess or make up a PIN, never state or repeat the PIN back out loud once given, and never claim a tool succeeded unless its actual response says so. Before calling remove_api_key or overwriting an existing set_api_key/memory item, always say out loud exactly what you're about to do and wait for the user to clearly confirm before calling the tool again with confirmed=true -- do not skip this even if asked to "just do it."`;
 
       const framework = config.agentFramework || 'native';
       activeFramework = framework;
@@ -3150,7 +3385,13 @@ wss.on('connection', (clientWs: WebSocket) => {
                       toolArgs: call.args,
                     });
 
-                    const result = await executeToolCall(call.name, call.args);
+                    const result = await executeToolCall(call.name, call.args, {
+                      ownerUnlocked,
+                      unlockOwner: () => { ownerUnlocked = true; },
+                      applySettingOnClient: (setting, value) => {
+                        sendToClient(clientWs, { type: 'apply_setting', toolName: setting, text: value });
+                      },
+                    });
                     responses.push({
                       id: call.id,
                       name: call.name,
