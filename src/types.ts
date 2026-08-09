@@ -53,6 +53,13 @@ export type AgentFramework =
   | 'open_human'
   | 'langchain_react';
 
+export interface RosterMember {
+  id: string; // 'native' | 'hermes' | 'open_claw'
+  displayName: string;
+  backend: 'native' | 'hermes' | 'open_claw';
+  voice: VoiceName;
+}
+
 export interface AppSettings {
   personaId: string;
   customInstruction: string;
@@ -60,6 +67,8 @@ export interface AppSettings {
   agentFramework: AgentFramework;
   hermesAgentKey: string; // X-Agent-Key for Vantage's real Hermes agent bridge; blank = use server default
   openClawAgentKey: string; // X-Agent-Key for Vantage's real OpenClaw agent bridge; blank = use server default
+  multiAgentEnabled: boolean; // real orchestrated multi-agent turn-taking; see docs/MULTI_AGENT_ORCHESTRATION.md
+  roster: RosterMember[]; // active only when multiAgentEnabled && length > 1
   vadSensitivity: number; // 0.01 to 0.15 RMS threshold
   silenceTimeoutMs: number; // milliseconds of silence before ending user turn
   enableBargeIn: boolean;

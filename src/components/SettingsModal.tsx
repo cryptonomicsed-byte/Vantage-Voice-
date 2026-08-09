@@ -368,6 +368,96 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
               </div>
 
+              {/* Multi-Agent Orchestration */}
+              <div className="pt-2">
+                <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700">
+                  <div>
+                    <h5 className="text-xs sm:text-sm font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                      <Bot className="w-3.5 h-3.5 text-purple-500" />
+                      Multi-Agent Mode (real orchestration)
+                    </h5>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      A real orchestrator plans who responds to each thing you say -- one agent, or several handing
+                      off a task to each other -- and speaks each in a distinct voice. Overrides single-agent
+                      framework selection above while active.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={localSettings.multiAgentEnabled}
+                    onChange={(e) => setLocalSettings((prev) => ({ ...prev, multiAgentEnabled: e.target.checked }))}
+                    className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 accent-purple-600 cursor-pointer shrink-0 ml-3"
+                  />
+                </div>
+
+                {localSettings.multiAgentEnabled && (
+                  <div className="mt-3 space-y-2">
+                    {localSettings.roster.map((member, idx) => (
+                      <div
+                        key={member.id}
+                        className="p-3 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 flex items-center justify-between gap-3"
+                      >
+                        <div>
+                          <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">{member.displayName}</span>
+                          <span className="ml-2 text-[10px] font-mono text-zinc-500">{member.backend}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={member.voice}
+                            onChange={(e) =>
+                              setLocalSettings((prev) => ({
+                                ...prev,
+                                roster: prev.roster.map((m, i) => (i === idx ? { ...m, voice: e.target.value as VoiceName } : m)),
+                              }))
+                            }
+                            className="text-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2 py-1 text-zinc-800 dark:text-zinc-100"
+                          >
+                            {AVAILABLE_VOICES.map((v) => (
+                              <option key={v.name} value={v.name}>{v.name}</option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() =>
+                              setLocalSettings((prev) => ({ ...prev, roster: prev.roster.filter((_, i) => i !== idx) }))
+                            }
+                            className="text-[11px] text-rose-500 hover:text-rose-600 font-semibold px-2"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {(['native', 'hermes', 'open_claw'] as const)
+                      .filter((b) => !localSettings.roster.some((m) => m.backend === b))
+                      .map((b) => (
+                        <button
+                          key={b}
+                          onClick={() =>
+                            setLocalSettings((prev) => ({
+                              ...prev,
+                              roster: [
+                                ...prev.roster,
+                                {
+                                  id: b,
+                                  displayName: b === 'native' ? 'Vantage' : b === 'hermes' ? 'Hermes' : 'OpenClaw',
+                                  backend: b,
+                                  voice: (b === 'hermes' ? 'Puck' : b === 'open_claw' ? 'Charon' : 'Zephyr') as VoiceName,
+                                },
+                              ],
+                            }))
+                          }
+                          className="w-full text-xs font-semibold text-indigo-600 dark:text-indigo-400 border border-dashed border-indigo-300 dark:border-indigo-700 rounded-2xl py-2 hover:bg-indigo-50 dark:hover:bg-indigo-950/30"
+                        >
+                          + Add {b === 'native' ? 'Vantage' : b === 'hermes' ? 'Hermes' : 'OpenClaw'} to the conversation
+                        </button>
+                      ))}
+                    {localSettings.roster.length < 2 && (
+                      <p className="text-[11px] text-amber-500">Need at least 2 participants for real multi-agent orchestration.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Tool Capabilities Toggles */}
               <div className="pt-2 space-y-3">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">

@@ -99,6 +99,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   agentFramework: 'native',
   hermesAgentKey: '',
   openClawAgentKey: '',
+  multiAgentEnabled: false,
+  roster: [
+    { id: 'native', displayName: 'Vantage', backend: 'native', voice: 'Zephyr' },
+    { id: 'hermes', displayName: 'Hermes', backend: 'hermes', voice: 'Puck' },
+    { id: 'open_claw', displayName: 'OpenClaw', backend: 'open_claw', voice: 'Charon' },
+  ],
   vadSensitivity: 0.02, // RMS volume sensitivity threshold
   silenceTimeoutMs: 1200,
   enableBargeIn: true,

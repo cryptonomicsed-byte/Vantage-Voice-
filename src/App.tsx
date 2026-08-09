@@ -582,6 +582,8 @@ export default function App() {
             agentFramework: settings.agentFramework,
             hermesAgentKey: settings.hermesAgentKey,
             openClawAgentKey: settings.openClawAgentKey,
+            multiAgentEnabled: settings.multiAgentEnabled,
+            roster: settings.roster,
           },
         })
       );
@@ -665,6 +667,8 @@ export default function App() {
                           agentFramework: prev.agentFramework,
                           hermesAgentKey: prev.hermesAgentKey,
                           openClawAgentKey: prev.openClawAgentKey,
+                          multiAgentEnabled: prev.multiAgentEnabled,
+                          roster: prev.roster,
                         },
                       })
                     );
@@ -1026,6 +1030,8 @@ export default function App() {
             agentFramework: newSettings.agentFramework,
             hermesAgentKey: newSettings.hermesAgentKey,
             openClawAgentKey: newSettings.openClawAgentKey,
+            multiAgentEnabled: newSettings.multiAgentEnabled,
+            roster: newSettings.roster,
           },
         })
       );

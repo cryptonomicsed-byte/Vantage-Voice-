@@ -27,6 +27,7 @@ import {
   callComposioTool,
   getDiscoveredComposioTools,
 } from './src/lib/composioMcp.js';
+import { planTurns, executeTurns, type RosterMember, type OrchestratorDeps } from './src/lib/orchestrator.js';
 
 const VANTAGE_MCP_URL_FOR_DISPLAY = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
 const VANTAGE_BASE_URL = process.env.VANTAGE_BASE_URL || 'https://omokoda.duckdns.org';
@@ -87,6 +88,27 @@ async function synthesizeSpeechDirect(text: string, voiceName: string): Promise<
   const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
   if (!audioData) throw new Error('Gemini TTS returned no audio data');
   return audioData;
+}
+
+/**
+ * Real, non-live Gemini text call -- used by the multi-agent orchestrator
+ * both for its own routing decisions and for "native" roster members'
+ * turns (so a native participant in a multi-agent exchange still gets a
+ * real, independent LLM call rather than reusing the live session).
+ */
+async function generateTextDirect(systemPrompt: string, userPrompt: string): Promise<string> {
+  const { client, hasKey } = getAiClient();
+  if (!hasKey) throw new Error('No Gemini API key available for orchestrator text generation');
+
+  const response = await client.models.generateContent({
+    model: 'gemini-3.1-flash-lite-preview',
+    contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+    config: { systemInstruction: systemPrompt },
+  });
+
+  const text = response.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || '';
+  if (!text.trim()) throw new Error('Gemini returned empty text');
+  return text.trim();
 }
 
 // Process level error safety
@@ -3305,6 +3327,9 @@ wss.on('connection', (clientWs: WebSocket) => {
   let activeHermesKey = '';
   let activeOpenClawKey = '';
   let ownerUnlocked = false; // per-connection only, never persisted, resets every new session
+  let multiAgentEnabled = false;
+  let roster: RosterMember[] = [];
+  let voiceNameForOrchestrator = 'Zephyr';
 
   clientWs.on('error', (err: any) => {
     console.warn('[WebSocket] Client socket error (handled):', err?.message || err);
@@ -3375,6 +3400,12 @@ wss.on('connection', (clientWs: WebSocket) => {
       activeFramework = framework;
       activeHermesKey = config.hermesAgentKey || DEFAULT_HERMES_AGENT_KEY;
       activeOpenClawKey = config.openClawAgentKey || DEFAULT_OPENCLAW_AGENT_KEY;
+      voiceNameForOrchestrator = voiceName;
+      multiAgentEnabled = Boolean(config.multiAgentEnabled) && Array.isArray(config.roster) && config.roster.length > 1;
+      roster = multiAgentEnabled ? config.roster : [];
+      if (multiAgentEnabled) {
+        systemInstruction = `[MULTI-AGENT SESSION] This conversation includes multiple participants: ${roster.map((m) => m.displayName).join(', ')}. An orchestrator routes each of your turns and speaks the other participants' real replies in their own voices -- you may hear turns attributed to them in the transcript. Speak only your own turn when it's yours.`;
+      }
 
       if (framework === 'hermes') {
         systemInstruction = `[REAL AGENT BRIDGE: HERMES] Your spoken replies are provided by a real, separate NousResearch Hermes agent instance running on Vantage -- you are the voice layer for it, not the reasoning source. When you receive an [EXTERNAL_AGENT_RESPONSE] message, speak it naturally in your own voice without changing its meaning. Do not invent a reply yourself for the primary question.`;
@@ -3474,13 +3505,51 @@ wss.on('connection', (clientWs: WebSocket) => {
                   isFinal: true,
                 });
 
-                // Real external-agent bridge dispatch: Hermes/OpenClaw are
-                // real, separately-hosted agents on Vantage -- route the
-                // finalized user utterance to the real bridge and hand
-                // Gemini the real reply to speak, instead of letting
-                // Gemini free-generate its own answer.
                 const utterance = pendingUserUtterance.trim();
                 pendingUserUtterance = '';
+
+                // Real multi-agent orchestration: plan which roster
+                // member(s) respond and execute their turns sequentially,
+                // each seeing the prior turns' real output. See
+                // docs/MULTI_AGENT_ORCHESTRATION.md.
+                if (multiAgentEnabled && utterance && liveSession) {
+                  const orchestratorDeps: OrchestratorDeps = {
+                    generateText: generateTextDirect,
+                    callBridge: async (backend, text) => {
+                      const key = backend === 'hermes' ? activeHermesKey : activeOpenClawKey;
+                      if (!key) throw new Error(`No agent key configured for ${backend}`);
+                      return callVantageAgentBridge(key, text);
+                    },
+                    speak: async (text, voice) => {
+                      const audioData = await synthesizeSpeechDirect(text, voice);
+                      sendToClient(clientWs, { type: 'audio', audio: audioData });
+                    },
+                    emitTranscript: (displayName, text) => {
+                      sendToClient(clientWs, {
+                        type: 'transcript',
+                        sender: 'tool',
+                        toolName: displayName,
+                        text,
+                        isFinal: true,
+                      });
+                    },
+                  };
+
+                  (async () => {
+                    try {
+                      const plan = await planTurns(generateTextDirect, utterance, roster, '');
+                      await executeTurns(orchestratorDeps, utterance, roster, plan);
+                    } catch (err: any) {
+                      console.warn('[Orchestrator] exchange failed:', err?.message || err);
+                      sendToClient(clientWs, { type: 'error', error: `Multi-agent exchange failed: ${err?.message || err}` });
+                    }
+                  })();
+                } else {
+                // Real external-agent bridge dispatch (single-agent mode):
+                // Hermes/OpenClaw are real, separately-hosted agents on
+                // Vantage -- route the finalized user utterance to the
+                // real bridge and hand Gemini the real reply to speak,
+                // instead of letting Gemini free-generate its own answer.
                 const bridgeKey =
                   activeFramework === 'hermes' ? activeHermesKey :
                   activeFramework === 'open_claw' ? activeOpenClawKey :
@@ -3524,6 +3593,7 @@ wss.on('connection', (clientWs: WebSocket) => {
                         error: `${activeFramework} agent bridge failed: ${err?.message || err}`,
                       });
                     });
+                }
                 }
               }
 
