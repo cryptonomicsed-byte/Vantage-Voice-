@@ -154,14 +154,39 @@ export function buildGeminiDeclarationsForVantageTools(): FunctionDeclaration[] 
  * Executes a real Vantage MCP tool call by its Gemini-declared name.
  * Returns the real tool result content (or throws with a real error
  * message) -- no template strings, no simulated success.
+ *
+ * If Vantage's own backend restarts, the streamable-HTTP session this
+ * client was holding becomes invalid server-side ("No valid session ID
+ * provided") even though the client object itself still looks connected
+ * -- found live during a real audit of this path. Detected here and
+ * retried once with a fresh connection rather than failing until the
+ * whole voice server is manually restarted.
  */
 export async function callVantageTool(geminiFunctionName: string, args: Record<string, any>): Promise<any> {
   const realName = nameMap.get(geminiFunctionName);
   if (!realName) {
     throw new Error(`Unknown Vantage MCP tool: ${geminiFunctionName}`);
   }
-  const c = await connect();
-  const result = await c.callTool({ name: realName, arguments: args });
+
+  const attempt = async () => {
+    const c = await connect();
+    return c.callTool({ name: realName, arguments: args });
+  };
+
+  let result;
+  try {
+    result = await attempt();
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    if (/session/i.test(msg)) {
+      console.warn('[VantageMCP] stale session detected, reconnecting and retrying once:', msg);
+      client = null;
+      result = await attempt();
+    } else {
+      throw err;
+    }
+  }
+
   if (result.isError) {
     const errText = Array.isArray(result.content)
       ? result.content.map((c: any) => c.text || '').join('\n')
