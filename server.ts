@@ -28,6 +28,7 @@ import {
   getDiscoveredComposioTools,
 } from './src/lib/composioMcp.js';
 import { planTurns, executeTurns, type RosterMember, type OrchestratorDeps } from './src/lib/orchestrator.js';
+import { spawnSwarmCodingTask, listSwarmPanels } from './src/lib/herdrSwarm.js';
 
 const VANTAGE_MCP_URL_FOR_DISPLAY = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
 const VANTAGE_BASE_URL = process.env.VANTAGE_BASE_URL || 'https://omokoda.duckdns.org';
@@ -490,7 +491,7 @@ const addRosterMemberDeclaration: FunctionDeclaration = {
 
 const removeRosterMemberDeclaration: FunctionDeclaration = {
   name: 'remove_roster_member',
-  description: 'Remove a participant from the real multi-agent roster by backend id (native/hermes/open_claw). Requires owner unlock.',
+  description: 'Remove a participant from the real multi-agent roster by backend id (native/hermes/open_claw).',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -498,6 +499,41 @@ const removeRosterMemberDeclaration: FunctionDeclaration = {
     },
     required: ['backend'],
   },
+};
+
+// ── Real swarm/delegation tools -- letting the current agent pull in
+// other real agents mid-conversation, not just via the pre-planned
+// multi-agent roster. See docs/MULTI_AGENT_ORCHESTRATION.md. ──
+const delegateToAgentDeclaration: FunctionDeclaration = {
+  name: 'delegate_to_agent',
+  description: 'Ask a real, separate agent (Hermes or OpenClaw, both real DeepSeek-backed instances on Vantage) a question or sub-task, and get its real reply back as text -- without adding them to the conversation roster. Use this to pull in a second opinion or hand off a sub-task mid-answer.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      backend: { type: Type.STRING, description: '"hermes" or "open_claw"' },
+      task: { type: Type.STRING, description: 'The question or task to send' },
+    },
+    required: ['backend', 'task'],
+  },
+};
+
+const spawnSwarmCodingTaskDeclaration: FunctionDeclaration = {
+  name: 'spawn_swarm_coding_task',
+  description: 'Spawn a real, visible terminal pane (via herdr, running on the Vantage VPS) that runs a real DeepSeek-backed coding agent (oh-my-pi) on a coding task -- it can write and run real code, not simulate it. Takes up to ~90 seconds; only use for genuine coding/file/script tasks. Requires owner unlock.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      taskName: { type: Type.STRING, description: 'Short label for the pane, e.g. "fix-parser"' },
+      prompt: { type: Type.STRING, description: 'The real coding task/prompt to give the agent' },
+    },
+    required: ['taskName', 'prompt'],
+  },
+};
+
+const listSwarmPanelsDeclaration: FunctionDeclaration = {
+  name: 'list_swarm_panels',
+  description: 'List real, currently active herdr agent panels on the Vantage VPS (from spawn_swarm_coding_task or elsewhere).',
+  parameters: { type: Type.OBJECT, properties: {} },
 };
 
 const queryMemoryVaultDeclaration: FunctionDeclaration = {
@@ -580,6 +616,9 @@ const liveTools = [
       disconnectComposioToolkitDeclaration,
       addRosterMemberDeclaration,
       removeRosterMemberDeclaration,
+      delegateToAgentDeclaration,
+      spawnSwarmCodingTaskDeclaration,
+      listSwarmPanelsDeclaration,
     ],
   },
 ];
@@ -974,7 +1013,8 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
 
   // ── Real multi-agent roster control ──
   if (name === 'add_roster_member') {
-    if (!ctx.ownerUnlocked) return { status: 'owner_unlock_required', message: 'Say the owner PIN first to unlock this.' };
+    // Not owner-gated: adding a conversation participant is reversible
+    // and session-scoped, not a credential/settings change.
     if (!ctx.applyRosterChange) return { status: 'error', message: 'No active client session.' };
     const backend = String(args.backend || '');
     if (!['native', 'hermes', 'open_claw'].includes(backend)) {
@@ -985,11 +1025,50 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
   }
 
   if (name === 'remove_roster_member') {
-    if (!ctx.ownerUnlocked) return { status: 'owner_unlock_required', message: 'Say the owner PIN first to unlock this.' };
     if (!ctx.applyRosterChange) return { status: 'error', message: 'No active client session.' };
     const backend = String(args.backend || '');
     ctx.applyRosterChange('remove', backend);
     return { status: 'ok', message: `${backend} removed from the roster.` };
+  }
+
+  // ── Real delegation / swarm ──
+  if (name === 'delegate_to_agent') {
+    const backend = String(args.backend || '');
+    const task = String(args.task || '');
+    if (!['hermes', 'open_claw'].includes(backend)) {
+      return { status: 'error', message: 'backend must be hermes or open_claw' };
+    }
+    if (!task.trim()) return { status: 'error', message: 'task is required' };
+    const key = backend === 'hermes' ? DEFAULT_HERMES_AGENT_KEY : DEFAULT_OPENCLAW_AGENT_KEY;
+    if (!key) return { status: 'error', message: `No agent key configured for ${backend}` };
+    try {
+      const reply = await callVantageAgentBridge(key, task);
+      return { status: 'ok', backend, reply };
+    } catch (err: any) {
+      return { status: 'error', message: err?.message || String(err) };
+    }
+  }
+
+  if (name === 'spawn_swarm_coding_task') {
+    if (!ctx.ownerUnlocked) return { status: 'owner_unlock_required', message: 'Say the owner PIN first to unlock this.' };
+    const taskName = String(args.taskName || 'task');
+    const prompt = String(args.prompt || '');
+    if (!prompt.trim()) return { status: 'error', message: 'prompt is required' };
+    try {
+      const output = await spawnSwarmCodingTask(taskName, prompt);
+      return { status: 'ok', taskName, output };
+    } catch (err: any) {
+      return { status: 'error', message: err?.message || String(err) };
+    }
+  }
+
+  if (name === 'list_swarm_panels') {
+    try {
+      const panels = await listSwarmPanels();
+      return { status: 'ok', panels };
+    } catch (err: any) {
+      return { status: 'error', message: err?.message || String(err) };
+    }
   }
 
   return { status: 'executed', result: 'Tool completed successfully' };
@@ -1891,7 +1970,7 @@ wss.on('connection', (clientWs: WebSocket) => {
       // real and destructive-capable, gated behind unlock_owner_controls
       // (spoken PIN) and, for anything irreversible, an explicit confirmed
       // flag -- both enforced server-side, not just by this instruction.
-      systemInstruction = `${systemInstruction}\n\nOwner controls: you have list_api_keys, set_api_key, remove_api_key, update_app_setting, add_roster_member, remove_roster_member, connect_composio_toolkit, disconnect_composio_toolkit, and secure-tier memory vault access -- but ALL of them are locked until the user speaks or types their owner PIN and you call unlock_owner_controls(pin). Never guess or make up a PIN, never state or repeat the PIN back out loud once given, and never claim a tool succeeded unless its actual response says so. Before calling remove_api_key, disconnect_composio_toolkit, or overwriting an existing set_api_key/memory item, always say out loud exactly what you're about to do and wait for the user to clearly confirm before calling the tool again with confirmed=true -- do not skip this even if asked to "just do it."\n\nFor real integrations you don't need owner unlock: list_composio_connections and search_composio_toolkits are always available so you can check what's connected or find a toolkit to recommend connecting.`;
+      systemInstruction = `${systemInstruction}\n\nOwner controls: you have list_api_keys, set_api_key, remove_api_key, update_app_setting, connect_composio_toolkit, disconnect_composio_toolkit, spawn_swarm_coding_task, and secure-tier memory vault access -- but ALL of them are locked until the user speaks or types their owner PIN and you call unlock_owner_controls(pin). Never guess or make up a PIN, never state or repeat the PIN back out loud once given, and never claim a tool succeeded unless its actual response says so. Before calling remove_api_key, disconnect_composio_toolkit, or overwriting an existing set_api_key/memory item, always say out loud exactly what you're about to do and wait for the user to clearly confirm before calling the tool again with confirmed=true -- do not skip this even if asked to "just do it."\n\nAlways available, no unlock needed: list_composio_connections, search_composio_toolkits, list_swarm_panels, delegate_to_agent, add_roster_member, and remove_roster_member. Use delegate_to_agent to pull in Hermes or OpenClaw for a second opinion or sub-task without changing who's in the conversation; use add_roster_member/remove_roster_member when the user wants to actually bring another agent into the live conversation (e.g. "let's get Hermes and OpenClaw in here to work on this together") -- after adding, the real orchestrator will plan and run their turns automatically on the next thing said. Use spawn_swarm_coding_task (owner-only) for real coding/file tasks that need an actual terminal and a real coding agent, not just a text reply -- tell the user it may take up to ~90 seconds.`;
 
       const framework = config.agentFramework || 'native';
       activeFramework = framework;
