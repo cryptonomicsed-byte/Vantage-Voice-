@@ -8,7 +8,7 @@
  */
 import type { GoogleGenAI } from '@google/genai';
 
-export type RosterBackend = 'native' | 'hermes' | 'open_claw';
+export type RosterBackend = 'native' | 'hermes' | 'hermes_contabo' | 'open_claw';
 
 export interface RosterMember {
   id: string;
@@ -26,7 +26,7 @@ export interface OrchestratorDeps {
   /** Real, non-live Gemini call used for both planning and native-member turns. */
   generateText: (systemPrompt: string, userPrompt: string) => Promise<string>;
   /** Real Hermes/OpenClaw bridge call (callVantageAgentBridge in server.ts). */
-  callBridge: (backend: 'hermes' | 'open_claw', text: string) => Promise<string>;
+  callBridge: (backend: 'hermes' | 'hermes_contabo' | 'open_claw', text: string) => Promise<string>;
   /** Real direct TTS + WS audio send for one spoken turn. */
   speak: (text: string, voice: string) => Promise<void>;
   /** Real WS transcript event, tagged with who's speaking. */

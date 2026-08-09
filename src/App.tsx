@@ -555,6 +555,7 @@ export default function App() {
             enableTools: settings.enableTools,
             agentFramework: settings.agentFramework,
             hermesAgentKey: settings.hermesAgentKey,
+            hermesContaboAgentKey: settings.hermesContaboAgentKey,
             openClawAgentKey: settings.openClawAgentKey,
             multiAgentEnabled: settings.multiAgentEnabled,
             roster: settings.roster,
@@ -640,6 +641,7 @@ export default function App() {
                           enableTools: prev.enableTools,
                           agentFramework: prev.agentFramework,
                           hermesAgentKey: prev.hermesAgentKey,
+                          hermesContaboAgentKey: prev.hermesContaboAgentKey,
                           openClawAgentKey: prev.openClawAgentKey,
                           multiAgentEnabled: prev.multiAgentEnabled,
                           roster: prev.roster,
@@ -773,8 +775,8 @@ export default function App() {
                 return { ...prev, roster: prev.roster.filter((m) => m.backend !== backend) };
               }
               if (prev.roster.some((m) => m.backend === backend)) return prev; // already present
-              const displayName = backend === 'native' ? 'Vantage' : backend === 'hermes' ? 'Hermes' : 'OpenClaw';
-              const defaultVoice = backend === 'hermes' ? 'Puck' : backend === 'open_claw' ? 'Charon' : 'Zephyr';
+              const displayName = backend === 'native' ? 'Vantage' : backend === 'hermes' ? 'Hermes (Hostinger)' : backend === 'hermes_contabo' ? 'Hermes (Contabo)' : 'OpenClaw';
+              const defaultVoice = backend === 'hermes' ? 'Puck' : backend === 'hermes_contabo' ? 'Aoede' : backend === 'open_claw' ? 'Charon' : 'Zephyr';
               return {
                 ...prev,
                 roster: [...prev.roster, { id: backend, displayName, backend, voice: (voice || defaultVoice) as VoiceName }],
@@ -1023,6 +1025,7 @@ export default function App() {
             enableTools: newSettings.enableTools,
             agentFramework: newSettings.agentFramework,
             hermesAgentKey: newSettings.hermesAgentKey,
+            hermesContaboAgentKey: newSettings.hermesContaboAgentKey,
             openClawAgentKey: newSettings.openClawAgentKey,
             multiAgentEnabled: newSettings.multiAgentEnabled,
             roster: newSettings.roster,

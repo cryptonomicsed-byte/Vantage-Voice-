@@ -282,11 +282,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     },
                     {
                       id: 'hermes' as AgentFramework,
-                      title: 'NousResearch Hermes Agent',
-                      desc: 'Real, live agent (gh repo clone NousResearch/hermes-agent) running on Vantage, DeepSeek-backed. Your speech is routed to its real cognition endpoint via Vantage /api/copilot/chat and spoken back verbatim.',
+                      title: 'Hermes (Hostinger)',
+                      desc: 'Real, live agent (gh repo clone NousResearch/hermes-agent) running on Vantage\'s Hostinger VPS, DeepSeek-backed. Your speech is routed to its real cognition endpoint via Vantage /api/copilot/chat and spoken back verbatim.',
                       icon: Brain,
                       color: 'text-emerald-500',
-                      repoTag: 'gh repo clone NousResearch/hermes-agent -- LIVE bridge',
+                      repoTag: 'gh repo clone NousResearch/hermes-agent -- LIVE bridge (Hostinger)',
+                    },
+                    {
+                      id: 'hermes_contabo' as AgentFramework,
+                      title: 'Hermes (Contabo)',
+                      desc: 'A second, real, separate NousResearch Hermes instance running on Vantage\'s Contabo VPS -- its own memory/session, same real DeepSeek + Vantage MCP (669 tools) wiring as the Hostinger one.',
+                      icon: Brain,
+                      color: 'text-teal-500',
+                      repoTag: 'gh repo clone NousResearch/hermes-agent -- LIVE bridge (Contabo)',
                     },
                     {
                       id: 'open_claw' as AgentFramework,
@@ -344,23 +352,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   })}
                 </div>
 
-                {(localSettings.agentFramework === 'hermes' || localSettings.agentFramework === 'open_claw') && (
+                {['hermes', 'hermes_contabo', 'open_claw'].includes(localSettings.agentFramework) && (
                   <div className="mt-3 p-3.5 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/50 space-y-2">
                     <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
                       <Key className="w-3.5 h-3.5 text-indigo-500" />
-                      {localSettings.agentFramework === 'hermes' ? 'Hermes' : 'OpenClaw'} Vantage Agent Key
+                      {localSettings.agentFramework === 'hermes' ? 'Hermes (Hostinger)' : localSettings.agentFramework === 'hermes_contabo' ? 'Hermes (Contabo)' : 'OpenClaw'} Vantage Agent Key
                     </label>
                     <input
                       type="password"
                       value={
-                        localSettings.agentFramework === 'hermes'
-                          ? localSettings.hermesAgentKey
+                        localSettings.agentFramework === 'hermes' ? localSettings.hermesAgentKey
+                          : localSettings.agentFramework === 'hermes_contabo' ? localSettings.hermesContaboAgentKey
                           : localSettings.openClawAgentKey
                       }
                       onChange={(e) =>
                         setLocalSettings((prev) =>
-                          prev.agentFramework === 'hermes'
-                            ? { ...prev, hermesAgentKey: e.target.value }
+                          prev.agentFramework === 'hermes' ? { ...prev, hermesAgentKey: e.target.value }
+                            : prev.agentFramework === 'hermes_contabo' ? { ...prev, hermesContaboAgentKey: e.target.value }
                             : { ...prev, openClawAgentKey: e.target.value }
                         )
                       }
@@ -435,30 +443,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </div>
                       </div>
                     ))}
-                    {(['native', 'hermes', 'open_claw'] as const)
+                    {(['native', 'hermes', 'hermes_contabo', 'open_claw'] as const)
                       .filter((b) => !localSettings.roster.some((m) => m.backend === b))
-                      .map((b) => (
-                        <button
-                          key={b}
-                          onClick={() =>
-                            setLocalSettings((prev) => ({
-                              ...prev,
-                              roster: [
-                                ...prev.roster,
-                                {
-                                  id: b,
-                                  displayName: b === 'native' ? 'Vantage' : b === 'hermes' ? 'Hermes' : 'OpenClaw',
-                                  backend: b,
-                                  voice: (b === 'hermes' ? 'Puck' : b === 'open_claw' ? 'Charon' : 'Zephyr') as VoiceName,
-                                },
-                              ],
-                            }))
-                          }
-                          className="w-full text-xs font-semibold text-indigo-600 dark:text-indigo-400 border border-dashed border-indigo-300 dark:border-indigo-700 rounded-2xl py-2 hover:bg-indigo-50 dark:hover:bg-indigo-950/30"
-                        >
-                          + Add {b === 'native' ? 'Vantage' : b === 'hermes' ? 'Hermes' : 'OpenClaw'} to the conversation
-                        </button>
-                      ))}
+                      .map((b) => {
+                        const label = b === 'native' ? 'Vantage' : b === 'hermes' ? 'Hermes (Hostinger)' : b === 'hermes_contabo' ? 'Hermes (Contabo)' : 'OpenClaw';
+                        const defaultVoice = (b === 'hermes' ? 'Puck' : b === 'hermes_contabo' ? 'Aoede' : b === 'open_claw' ? 'Charon' : 'Zephyr') as VoiceName;
+                        return (
+                          <button
+                            key={b}
+                            onClick={() =>
+                              setLocalSettings((prev) => ({
+                                ...prev,
+                                roster: [...prev.roster, { id: b, displayName: label, backend: b, voice: defaultVoice }],
+                              }))
+                            }
+                            className="w-full text-xs font-semibold text-indigo-600 dark:text-indigo-400 border border-dashed border-indigo-300 dark:border-indigo-700 rounded-2xl py-2 hover:bg-indigo-50 dark:hover:bg-indigo-950/30"
+                          >
+                            + Add {label} to the conversation
+                          </button>
+                        );
+                      })}
                     {localSettings.roster.length < 2 && (
                       <p className="text-[11px] text-amber-500">Need at least 2 participants for real multi-agent orchestration.</p>
                     )}

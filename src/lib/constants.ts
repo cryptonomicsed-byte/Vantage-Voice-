@@ -98,11 +98,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   voice: 'Zephyr',
   agentFramework: 'native',
   hermesAgentKey: '',
+  hermesContaboAgentKey: '',
   openClawAgentKey: '',
   multiAgentEnabled: false,
   roster: [
     { id: 'native', displayName: 'Vantage', backend: 'native', voice: 'Zephyr' },
-    { id: 'hermes', displayName: 'Hermes', backend: 'hermes', voice: 'Puck' },
+    { id: 'hermes', displayName: 'Hermes (Hostinger)', backend: 'hermes', voice: 'Puck' },
+    { id: 'hermes_contabo', displayName: 'Hermes (Contabo)', backend: 'hermes_contabo', voice: 'Aoede' },
     { id: 'open_claw', displayName: 'OpenClaw', backend: 'open_claw', voice: 'Charon' },
   ],
   vadSensitivity: 0.02, // RMS volume sensitivity threshold

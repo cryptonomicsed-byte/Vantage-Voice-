@@ -49,14 +49,15 @@ export interface TranscriptItem {
 export type AgentFramework =
   | 'native'
   | 'hermes'
+  | 'hermes_contabo'
   | 'open_claw'
   | 'open_human'
   | 'langchain_react';
 
 export interface RosterMember {
-  id: string; // 'native' | 'hermes' | 'open_claw'
+  id: string; // 'native' | 'hermes' | 'hermes_contabo' | 'open_claw'
   displayName: string;
-  backend: 'native' | 'hermes' | 'open_claw';
+  backend: 'native' | 'hermes' | 'hermes_contabo' | 'open_claw';
   voice: VoiceName;
 }
 
@@ -65,7 +66,8 @@ export interface AppSettings {
   customInstruction: string;
   voice: VoiceName;
   agentFramework: AgentFramework;
-  hermesAgentKey: string; // X-Agent-Key for Vantage's real Hermes agent bridge; blank = use server default
+  hermesAgentKey: string; // X-Agent-Key for Vantage's real Hermes agent bridge (Hostinger instance); blank = use server default
+  hermesContaboAgentKey: string; // X-Agent-Key for Vantage's real second Hermes instance running on Contabo; blank = use server default
   openClawAgentKey: string; // X-Agent-Key for Vantage's real OpenClaw agent bridge; blank = use server default
   multiAgentEnabled: boolean; // real orchestrated multi-agent turn-taking; see docs/MULTI_AGENT_ORCHESTRATION.md
   roster: RosterMember[]; // active only when multiAgentEnabled && length > 1

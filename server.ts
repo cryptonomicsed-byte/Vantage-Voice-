@@ -41,6 +41,11 @@ const VANTAGE_BASE_URL = process.env.VANTAGE_BASE_URL || 'https://omokoda.duckdn
 // agent's real cognition_url and return its real reply. A user can
 // override either from Settings; blank means "use this server default."
 const DEFAULT_HERMES_AGENT_KEY = process.env.HERMES_AGENT_KEY || '';
+// Second real Hermes instance, running natively on Contabo (this box)
+// rather than Hostinger -- same real DeepSeek-backed NousResearch
+// hermes-agent, same real Vantage MCP wiring (669 tools confirmed live),
+// separate identity/session/memory from the Hostinger one.
+const DEFAULT_HERMES_CONTABO_AGENT_KEY = process.env.HERMES_CONTABO_AGENT_KEY || '';
 const DEFAULT_OPENCLAW_AGENT_KEY = process.env.OPENCLAW_AGENT_KEY || '';
 
 /**
@@ -482,7 +487,7 @@ const addRosterMemberDeclaration: FunctionDeclaration = {
   parameters: {
     type: Type.OBJECT,
     properties: {
-      backend: { type: Type.STRING, description: '"native", "hermes", or "open_claw"' },
+      backend: { type: Type.STRING, description: '"native", "hermes", "hermes_contabo", or "open_claw"' },
       voice: { type: Type.STRING, description: 'Gemini voice name to assign, e.g. "Puck"' },
     },
     required: ['backend'],
@@ -495,7 +500,7 @@ const removeRosterMemberDeclaration: FunctionDeclaration = {
   parameters: {
     type: Type.OBJECT,
     properties: {
-      backend: { type: Type.STRING, description: '"native", "hermes", or "open_claw"' },
+      backend: { type: Type.STRING, description: '"native", "hermes", "hermes_contabo", or "open_claw"' },
     },
     required: ['backend'],
   },
@@ -1017,8 +1022,8 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
     // and session-scoped, not a credential/settings change.
     if (!ctx.applyRosterChange) return { status: 'error', message: 'No active client session.' };
     const backend = String(args.backend || '');
-    if (!['native', 'hermes', 'open_claw'].includes(backend)) {
-      return { status: 'error', message: 'backend must be native, hermes, or open_claw' };
+    if (!['native', 'hermes', 'hermes_contabo', 'open_claw'].includes(backend)) {
+      return { status: 'error', message: 'backend must be native, hermes, hermes_contabo, or open_claw' };
     }
     ctx.applyRosterChange('add', backend, args.voice ? String(args.voice) : undefined);
     return { status: 'ok', message: `${backend} added to the roster.` };
@@ -1035,11 +1040,13 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
   if (name === 'delegate_to_agent') {
     const backend = String(args.backend || '');
     const task = String(args.task || '');
-    if (!['hermes', 'open_claw'].includes(backend)) {
-      return { status: 'error', message: 'backend must be hermes or open_claw' };
+    if (!['hermes', 'hermes_contabo', 'open_claw'].includes(backend)) {
+      return { status: 'error', message: 'backend must be hermes, hermes_contabo, or open_claw' };
     }
     if (!task.trim()) return { status: 'error', message: 'task is required' };
-    const key = backend === 'hermes' ? DEFAULT_HERMES_AGENT_KEY : DEFAULT_OPENCLAW_AGENT_KEY;
+    const key = backend === 'hermes' ? DEFAULT_HERMES_AGENT_KEY
+      : backend === 'hermes_contabo' ? DEFAULT_HERMES_CONTABO_AGENT_KEY
+      : DEFAULT_OPENCLAW_AGENT_KEY;
     if (!key) return { status: 'error', message: `No agent key configured for ${backend}` };
     try {
       const reply = await callVantageAgentBridge(key, task);
@@ -1901,6 +1908,7 @@ wss.on('connection', (clientWs: WebSocket) => {
   let pendingUserUtterance = '';
   let activeFramework: string = 'native';
   let activeHermesKey = '';
+  let activeHermesContaboKey = '';
   let activeOpenClawKey = '';
   let ownerUnlocked = false; // per-connection only, never persisted, resets every new session
   let multiAgentEnabled = false;
@@ -1975,6 +1983,7 @@ wss.on('connection', (clientWs: WebSocket) => {
       const framework = config.agentFramework || 'native';
       activeFramework = framework;
       activeHermesKey = config.hermesAgentKey || DEFAULT_HERMES_AGENT_KEY;
+      activeHermesContaboKey = config.hermesContaboAgentKey || DEFAULT_HERMES_CONTABO_AGENT_KEY;
       activeOpenClawKey = config.openClawAgentKey || DEFAULT_OPENCLAW_AGENT_KEY;
       voiceNameForOrchestrator = voiceName;
       multiAgentEnabled = Boolean(config.multiAgentEnabled) && Array.isArray(config.roster) && config.roster.length > 1;
@@ -1984,7 +1993,9 @@ wss.on('connection', (clientWs: WebSocket) => {
       }
 
       if (framework === 'hermes') {
-        systemInstruction = `[REAL AGENT BRIDGE: HERMES] Your spoken replies are provided by a real, separate NousResearch Hermes agent instance running on Vantage -- you are the voice layer for it, not the reasoning source. When you receive an [EXTERNAL_AGENT_RESPONSE] message, speak it naturally in your own voice without changing its meaning. Do not invent a reply yourself for the primary question.`;
+        systemInstruction = `[REAL AGENT BRIDGE: HERMES (Hostinger)] Your spoken replies are provided by a real, separate NousResearch Hermes agent instance running on Vantage (Hostinger) -- you are the voice layer for it, not the reasoning source. When you receive an [EXTERNAL_AGENT_RESPONSE] message, speak it naturally in your own voice without changing its meaning. Do not invent a reply yourself for the primary question.`;
+      } else if (framework === 'hermes_contabo') {
+        systemInstruction = `[REAL AGENT BRIDGE: HERMES (Contabo)] Your spoken replies are provided by a second, real, separate NousResearch Hermes agent instance running on Vantage (Contabo, distinct from the Hostinger one -- its own memory/session) -- you are the voice layer for it, not the reasoning source. When you receive an [EXTERNAL_AGENT_RESPONSE] message, speak it naturally in your own voice without changing its meaning. Do not invent a reply yourself for the primary question.`;
       } else if (framework === 'open_claw') {
         systemInstruction = `[REAL AGENT BRIDGE: OPENCLAW] Your spoken replies are provided by a real, separate OpenClaw agent instance running on Vantage -- you are the voice layer for it, not the reasoning source. When you receive an [EXTERNAL_AGENT_RESPONSE] message, speak it naturally in your own voice without changing its meaning. Do not invent a reply yourself for the primary question.`;
       } else if (framework === 'open_human') {
@@ -2092,7 +2103,9 @@ wss.on('connection', (clientWs: WebSocket) => {
                   const orchestratorDeps: OrchestratorDeps = {
                     generateText: generateTextDirect,
                     callBridge: async (backend, text) => {
-                      const key = backend === 'hermes' ? activeHermesKey : activeOpenClawKey;
+                      const key = backend === 'hermes' ? activeHermesKey
+                        : backend === 'hermes_contabo' ? activeHermesContaboKey
+                        : activeOpenClawKey;
                       if (!key) throw new Error(`No agent key configured for ${backend}`);
                       return callVantageAgentBridge(key, text);
                     },
@@ -2128,6 +2141,7 @@ wss.on('connection', (clientWs: WebSocket) => {
                 // instead of letting Gemini free-generate its own answer.
                 const bridgeKey =
                   activeFramework === 'hermes' ? activeHermesKey :
+                  activeFramework === 'hermes_contabo' ? activeHermesContaboKey :
                   activeFramework === 'open_claw' ? activeOpenClawKey :
                   '';
                 if (bridgeKey && utterance && liveSession) {
