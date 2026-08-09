@@ -3,7 +3,6 @@ import { ConnectionStatus, ConversationState } from '../types';
 import {
   Mic,
   Radio,
-  Settings,
   Moon,
   Sun,
   Volume2,
@@ -25,7 +24,6 @@ interface HeaderProps {
   agentFramework?: string;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
-  onOpenSettings: () => void;
   onOpenOAuthModal?: () => void;
   onOpenVantageHub?: () => void;
   onOpenAgents?: () => void;
@@ -42,7 +40,6 @@ export const Header: React.FC<HeaderProps> = ({
   agentFramework,
   theme,
   onToggleTheme,
-  onOpenSettings,
   onOpenOAuthModal,
   onOpenVantageHub,
   onOpenAgents,
@@ -181,14 +178,6 @@ export const Header: React.FC<HeaderProps> = ({
             {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-400" /> : <Moon className="w-5 h-5 text-zinc-600" />}
           </button>
 
-          {/* Settings Button */}
-          <button
-            onClick={onOpenSettings}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium text-zinc-700 dark:text-zinc-200 bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-800 transition-colors shadow-sm"
-          >
-            <Settings className="w-4 h-4 text-indigo-500" />
-            <span className="hidden sm:inline">Settings</span>
-          </button>
         </div>
       </div>
 

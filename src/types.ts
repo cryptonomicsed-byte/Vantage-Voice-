@@ -125,7 +125,7 @@ export interface MemoryItem {
 }
 
 export interface ServerToClientMessage {
-  type: 'connected' | 'audio' | 'transcript' | 'interrupted' | 'status' | 'tool_call' | 'error' | 'pong' | 'apply_setting';
+  type: 'connected' | 'audio' | 'transcript' | 'interrupted' | 'status' | 'tool_call' | 'error' | 'pong' | 'apply_setting' | 'apply_roster_change';
   audio?: string; // Base64 PCM 24kHz audio chunk
   text?: string;
   sender?: 'user' | 'model';

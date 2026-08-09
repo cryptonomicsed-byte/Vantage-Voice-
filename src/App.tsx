@@ -9,6 +9,7 @@ import {
   MemoryItem,
   MemoryTier,
   VoiceCommandLogItem,
+  VoiceName,
 } from './types';
 import { DEFAULT_SETTINGS, SYSTEM_PERSONAS } from './lib/constants';
 import { AudioPlayer } from './lib/audioPlayer';
@@ -763,6 +764,26 @@ export default function App() {
           });
 
           triggerToast('⚙️ Setting Updated', `Agent changed "${settingName}" to "${raw}"`);
+        } else if (msg.type === 'apply_roster_change') {
+          const action = msg.toolName; // 'add' | 'remove'
+          try {
+            const { backend, voice } = JSON.parse(msg.text || '{}');
+            setSettings((prev) => {
+              if (action === 'remove') {
+                return { ...prev, roster: prev.roster.filter((m) => m.backend !== backend) };
+              }
+              if (prev.roster.some((m) => m.backend === backend)) return prev; // already present
+              const displayName = backend === 'native' ? 'Vantage' : backend === 'hermes' ? 'Hermes' : 'OpenClaw';
+              const defaultVoice = backend === 'hermes' ? 'Puck' : backend === 'open_claw' ? 'Charon' : 'Zephyr';
+              return {
+                ...prev,
+                roster: [...prev.roster, { id: backend, displayName, backend, voice: (voice || defaultVoice) as VoiceName }],
+              };
+            });
+            triggerToast('🎭 Roster Updated', `Agent ${action === 'remove' ? 'removed' : 'added'} "${backend}"`);
+          } catch (e) {
+            console.warn('[apply_roster_change] failed to parse:', e);
+          }
         } else if (msg.type === 'error') {
           console.error('[S2S Error]:', msg.error);
           setErrorMessage(msg.error);
@@ -1067,7 +1088,6 @@ export default function App() {
         onToggleTheme={() =>
           setSettings((prev) => ({ ...prev, theme: prev.theme === 'dark' ? 'light' : 'dark' }))
         }
-        onOpenSettings={() => { setSettingsInitialTab(undefined); setIsSettingsOpen(true); }}
         onOpenOAuthModal={() => setIsOAuthModalOpen(true)}
         onOpenVantageHub={() => setIsVantageHubOpen(true)}
         onOpenAgents={() => {

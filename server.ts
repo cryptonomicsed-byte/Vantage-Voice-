@@ -282,21 +282,6 @@ function getAiClient() {
 }
 
 // Tool Function Declarations for Gemini Live API
-const getWeatherDeclaration: FunctionDeclaration = {
-  name: 'get_weather',
-  description: 'Get the current weather conditions and temperature for a given location.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      location: {
-        type: Type.STRING,
-        description: 'The city and country/state, e.g. "San Francisco, CA" or "Tokyo, Japan"',
-      },
-    },
-    required: ['location'],
-  },
-};
-
 const getCurrentTimeDeclaration: FunctionDeclaration = {
   name: 'get_current_time',
   description: 'Get the current time, day, and date for a timezone or location.',
@@ -306,138 +291,6 @@ const getCurrentTimeDeclaration: FunctionDeclaration = {
       location: {
         type: Type.STRING,
         description: 'Location name or timezone string',
-      },
-    },
-  },
-};
-
-const webSearchDeclaration: FunctionDeclaration = {
-  name: 'web_search',
-  description: 'Perform real-time web search (Google, Bing, or specialized search APIs) for live facts, current events, real-time query results, and authoritative web URLs.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      query: {
-        type: Type.STRING,
-        description: 'Search query string',
-      },
-      engine: {
-        type: Type.STRING,
-        description: 'Search engine provider: "Google", "Bing", "DuckDuckGo", or "Specialized"',
-      },
-      searchDepth: {
-        type: Type.STRING,
-        description: 'Search depth mode: "quick" or "deep"',
-      },
-    },
-    required: ['query'],
-  },
-};
-
-const browseWebPageDeclaration: FunctionDeclaration = {
-  name: 'browse_web_page',
-  description: 'Browse and scrape a web page URL to fetch full page content, extract clean main body text, headings, links, and metadata.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      url: {
-        type: Type.STRING,
-        description: 'Target URL to browse and scrape',
-      },
-      extractFormat: {
-        type: Type.STRING,
-        description: 'Format mode: "text", "markdown", or "structured"',
-      },
-      maxCharacters: {
-        type: Type.NUMBER,
-        description: 'Maximum characters of extracted text to return (default 2500)',
-      },
-    },
-    required: ['url'],
-  },
-};
-
-const fetchNewsFeedDeclaration: FunctionDeclaration = {
-  name: 'fetch_news_feed',
-  description: 'Fetch real-time news feeds, breaking headlines, or topic-filtered news updates from global wire sources.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      category: {
-        type: Type.STRING,
-        description: 'News category: "top_stories", "tech", "science", "business", "world", "ai_research"',
-      },
-      keyword: {
-        type: Type.STRING,
-        description: 'Optional topic or keyword search filter (e.g. "quantum computing", "Federal Reserve")',
-      },
-      country: {
-        type: Type.STRING,
-        description: 'Region code, e.g. "US", "GLOBAL", "UK", "JP"',
-      },
-    },
-  },
-};
-
-const wikipediaLookupDeclaration: FunctionDeclaration = {
-  name: 'wikipedia_lookup',
-  description: 'Look up structured articles, entity definitions, historical facts, and infobox data on Wikipedia or knowledge-bases.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      topic: {
-        type: Type.STRING,
-        description: 'Entity name, topic term, or article title to look up',
-      },
-      section: {
-        type: Type.STRING,
-        description: 'Optional section focus (e.g. "Overview", "History", "Specifications")',
-      },
-    },
-    required: ['topic'],
-  },
-};
-
-const searchArxivPapersDeclaration: FunctionDeclaration = {
-  name: 'search_arxiv_papers',
-  description: 'Search academic research papers and arXiv preprints for scholarly literature, abstracts, author lists, and direct PDF links.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      query: {
-        type: Type.STRING,
-        description: 'Research topic, algorithm name, or paper title',
-      },
-      category: {
-        type: Type.STRING,
-        description: 'arXiv domain category (e.g. "cs.AI", "cs.CL", "cs.CV", "stat.ML", "physics", "math")',
-      },
-      sortBy: {
-        type: Type.STRING,
-        description: 'Sort order: "relevance" or "submittedDate"',
-      },
-    },
-    required: ['query'],
-  },
-};
-
-const analyzeVisualMediaDeclaration: FunctionDeclaration = {
-  name: 'analyze_visual_media',
-  description: 'Perform multimodal visual understanding on images, video frames, or live camera feeds for scene breakdown, object detection, and OCR text extraction.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      mediaType: {
-        type: Type.STRING,
-        description: 'Media type: "image", "video_frame", or "camera_stream"',
-      },
-      analysisTarget: {
-        type: Type.STRING,
-        description: 'Goal: "general_description", "ocr_text", "object_detection", "visual_layout", "spatial_qa"',
-      },
-      prompt: {
-        type: Type.STRING,
-        description: 'Specific visual question or inspection query',
       },
     },
   },
@@ -463,525 +316,6 @@ const calculateDeclaration: FunctionDeclaration = {
       },
     },
     required: ['expression'],
-  },
-};
-
-const executeTerminalCommandDeclaration: FunctionDeclaration = {
-  name: 'execute_terminal_command',
-  description: 'Execute shell or terminal commands (e.g., bash/sh) to check system status, run commands, list processes, or inspect runtime environment.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      command: {
-        type: Type.STRING,
-        description: 'Shell command string to execute (e.g. "python3 --version", "uptime", "df -h", "node -v")',
-      },
-      cwd: {
-        type: Type.STRING,
-        description: 'Working directory path (default ".")',
-      },
-      timeoutMs: {
-        type: Type.NUMBER,
-        description: 'Maximum execution timeout in milliseconds (default 5000)',
-      },
-    },
-    required: ['command'],
-  },
-};
-
-const runDataAnalysisDeclaration: FunctionDeclaration = {
-  name: 'run_data_analysis',
-  description: 'Perform data analysis using pandas DataFrames or SQL queries over tabular data, JSON records, or CSV datasets.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      operation: {
-        type: Type.STRING,
-        description: 'Analysis type: "sql_query", "pandas_describe", "aggregate_group_by", or "filter_rows"',
-      },
-      query: {
-        type: Type.STRING,
-        description: 'SQL statement or pandas operation expression (e.g. "SELECT category, SUM(revenue) FROM dataset GROUP BY category")',
-      },
-      datasetJson: {
-        type: Type.STRING,
-        description: 'Optional dataset in JSON format or raw CSV string',
-      },
-    },
-    required: ['operation', 'query'],
-  },
-};
-
-const localFileSystemDeclaration: FunctionDeclaration = {
-  name: 'local_file_system',
-  description: 'Access local workspace file system to read file contents, write files, list directory items, edit file blocks, or delete files.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      operation: {
-        type: Type.STRING,
-        description: 'File operation: "read", "write", "list", "edit", "delete", or "info"',
-      },
-      filePath: {
-        type: Type.STRING,
-        description: 'Target relative file or directory path (e.g. "/src/App.tsx", "/server.ts", "package.json")',
-      },
-      content: {
-        type: Type.STRING,
-        description: 'File content payload (for "write")',
-      },
-      targetContent: {
-        type: Type.STRING,
-        description: 'Target string snippet to replace (for "edit")',
-      },
-      replacementContent: {
-        type: Type.STRING,
-        description: 'New replacement string snippet (for "edit")',
-      },
-    },
-    required: ['operation', 'filePath'],
-  },
-};
-
-const automateBrowserDeclaration: FunctionDeclaration = {
-  name: 'automate_browser',
-  description: 'Automate browser actions including website navigation, clicking CSS/XPath selectors, typing text into form inputs, submitting forms, and waiting for elements (supports Stagehand & Browser Use protocols).',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      action: {
-        type: Type.STRING,
-        description: 'Browser action: "navigate", "click", "type", "fill_form", "scroll", "evaluate_script", or "screenshot"',
-      },
-      url: {
-        type: Type.STRING,
-        description: 'Target URL for "navigate"',
-      },
-      selector: {
-        type: Type.STRING,
-        description: 'CSS selector or XPath for target element (e.g. "button#submit", "input[name=\'search\']")'
-      },
-      text: {
-        type: Type.STRING,
-        description: 'Text string to type into form input',
-      },
-      script: {
-        type: Type.STRING,
-        description: 'Optional JavaScript expression to execute in browser context',
-      },
-    },
-    required: ['action'],
-  },
-};
-
-const desktopComputerControlDeclaration: FunctionDeclaration = {
-  name: 'desktop_computer_control',
-  description: 'Perform OS-level desktop computer control including taking full screen capture, virtual mouse movements and clicks at (X, Y) coordinates, and keyboard typing/hotkey combinations.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      action: {
-        type: Type.STRING,
-        description: 'Control action: "screenshot", "mouse_move", "mouse_click", "mouse_drag", "keyboard_type", or "hotkey"',
-      },
-      coordinateX: {
-        type: Type.NUMBER,
-        description: 'Horizontal pixel coordinate X (0 to 1920)',
-      },
-      coordinateY: {
-        type: Type.NUMBER,
-        description: 'Vertical pixel coordinate Y (0 to 1080)',
-      },
-      clickType: {
-        type: Type.STRING,
-        description: 'Click type: "left_click", "right_click", "double_click", or "middle_click"',
-      },
-      keys: {
-        type: Type.STRING,
-        description: 'Keyboard text sequence or shortcut combination (e.g., "Ctrl+Shift+R", "Return")',
-      },
-    },
-    required: ['action'],
-  },
-};
-
-const readScreenOcrDeclaration: FunctionDeclaration = {
-  name: 'read_screen_ocr',
-  description: 'Perform optical character recognition (OCR) and layout analysis on desktop screen captures or window regions to extract text labels, buttons, and bounding box locations.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      region: {
-        type: Type.STRING,
-        description: 'Screen capture target: "full_screen", "active_window", or "custom_crop"',
-      },
-      cropBox: {
-        type: Type.STRING,
-        description: 'Optional pixel crop coordinates "X, Y, Width, Height" (e.g. "100, 200, 800, 600")',
-      },
-      filterKeyword: {
-        type: Type.STRING,
-        description: 'Optional filter keyword to search for specific text on screen',
-      },
-    },
-  },
-};
-
-const manageEmailDeclaration: FunctionDeclaration = {
-  name: 'manage_email',
-  description: 'Send emails or search/read inbox threads via Gmail or SMTP/IMAP protocol integration.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      action: {
-        type: Type.STRING,
-        description: 'Action: "send", "read_inbox", "search_messages", or "get_thread"',
-      },
-      recipient: {
-        type: Type.STRING,
-        description: 'Email address of recipient (e.g. "user@example.com")',
-      },
-      subject: {
-        type: Type.STRING,
-        description: 'Email subject line',
-      },
-      body: {
-        type: Type.STRING,
-        description: 'Email body text or HTML content',
-      },
-      searchQuery: {
-        type: Type.STRING,
-        description: 'Search filter string for inbox search (e.g. "from:boss is:unread")',
-      },
-    },
-    required: ['action'],
-  },
-};
-
-const sendChatMessageDeclaration: FunctionDeclaration = {
-  name: 'send_chat_message',
-  description: 'Send chat messages, notifications, or channel alerts to Slack, Discord, or Microsoft Teams channels.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      platform: {
-        type: Type.STRING,
-        description: 'Messaging platform: "slack", "discord", or "teams"',
-      },
-      channelOrUser: {
-        type: Type.STRING,
-        description: 'Target channel name, ID, or user handle (e.g. "#general", "@alex")',
-      },
-      message: {
-        type: Type.STRING,
-        description: 'Message body text or markdown payload',
-      },
-    },
-    required: ['platform', 'channelOrUser', 'message'],
-  },
-};
-
-const manageCalendarEventsDeclaration: FunctionDeclaration = {
-  name: 'manage_calendar_events',
-  description: 'Create, read, or list calendar events, meetings, and reminders across Google Calendar or Outlook Calendar.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      action: {
-        type: Type.STRING,
-        description: 'Calendar action: "list_events", "create_event", "update_event", or "delete_event"',
-      },
-      title: {
-        type: Type.STRING,
-        description: 'Event title or meeting subject',
-      },
-      startTime: {
-        type: Type.STRING,
-        description: 'Start ISO timestamp or human string (e.g. "2026-08-07T10:00:00Z")',
-      },
-      endTime: {
-        type: Type.STRING,
-        description: 'End ISO timestamp or human string (e.g. "2026-08-07T11:00:00Z")',
-      },
-      attendees: {
-        type: Type.STRING,
-        description: 'Comma separated list of attendee email addresses',
-      },
-    },
-    required: ['action'],
-  },
-};
-
-const manageDocsAndNotionDeclaration: FunctionDeclaration = {
-  name: 'manage_docs_and_notion',
-  description: 'Read or write documents, pages, or database rows in Notion, Google Docs, or Google Sheets.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      provider: {
-        type: Type.STRING,
-        description: 'Platform provider: "notion", "google_docs", or "google_sheets"',
-      },
-      action: {
-        type: Type.STRING,
-        description: 'Action: "read_page", "append_content", "query_database", or "append_row"',
-      },
-      documentId: {
-        type: Type.STRING,
-        description: 'Page ID, document ID, or spreadsheet ID',
-      },
-      content: {
-        type: Type.STRING,
-        description: 'Text content, markdown block, or JSON row array to write/append',
-      },
-    },
-    required: ['provider', 'action'],
-  },
-};
-
-const sendSmsNotificationDeclaration: FunctionDeclaration = {
-  name: 'send_sms_notification',
-  description: 'Send SMS text messages or push desktop system alerts/notifications.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      type: {
-        type: Type.STRING,
-        description: 'Notification type: "sms" or "desktop_push"',
-      },
-      phoneNumber: {
-        type: Type.STRING,
-        description: 'Target phone number for SMS (e.g. "+14155552671")',
-      },
-      message: {
-        type: Type.STRING,
-        description: 'Notification body text message',
-      },
-    },
-    required: ['type', 'message'],
-  },
-};
-
-const githubDevToolsDeclaration: FunctionDeclaration = {
-  name: 'github_dev_tools',
-  description: 'Manage GitHub repositories: search code/repos, create issues and pull requests, inspect code files, or manage branches.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      action: {
-        type: Type.STRING,
-        description: 'Action: "search_repos", "read_code", "create_issue", "create_pr", "list_branches", or "create_branch"',
-      },
-      repo: {
-        type: Type.STRING,
-        description: 'Target repository path (e.g. "owner/repo")',
-      },
-      filePathOrQuery: {
-        type: Type.STRING,
-        description: 'File path or search query term',
-      },
-      title: {
-        type: Type.STRING,
-        description: 'Issue or PR title',
-      },
-      body: {
-        type: Type.STRING,
-        description: 'Issue or PR body markdown text',
-      },
-      branch: {
-        type: Type.STRING,
-        description: 'Branch name (e.g. "main" or "feature/voice-agent")',
-      },
-    },
-    required: ['action'],
-  },
-};
-
-const databaseQueryDeclaration: FunctionDeclaration = {
-  name: 'database_query',
-  description: 'Execute SQL queries or vector similarity searches across SQL (PostgreSQL, MySQL) or Vector databases (Pinecone, ChromaDB, PgVector).',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      dbType: {
-        type: Type.STRING,
-        description: 'Database type: "sql_postgres", "sql_mysql", "vector_pinecone", or "vector_chroma"',
-      },
-      action: {
-        type: Type.STRING,
-        description: 'Action: "execute_query", "similarity_search", or "list_tables"',
-      },
-      queryOrVector: {
-        type: Type.STRING,
-        description: 'SQL query string or search query phrase for vector embedding search',
-      },
-      topK: {
-        type: Type.NUMBER,
-        description: 'Top K nearest neighbor matches for vector search (default 5)',
-      },
-    },
-    required: ['dbType', 'action', 'queryOrVector'],
-  },
-};
-
-const makeHttpApiCallDeclaration: FunctionDeclaration = {
-  name: 'make_http_api_call',
-  description: 'Execute generic HTTP API requests (GET, POST, PUT, DELETE) with custom headers and JSON body payloads to external web services.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      method: {
-        type: Type.STRING,
-        description: 'HTTP method: "GET", "POST", "PUT", or "DELETE"',
-      },
-      url: {
-        type: Type.STRING,
-        description: 'Target API endpoint URL',
-      },
-      headers: {
-        type: Type.STRING,
-        description: 'Optional JSON object string of request headers',
-      },
-      body: {
-        type: Type.STRING,
-        description: 'Optional request body JSON or string payload',
-      },
-    },
-    required: ['method', 'url'],
-  },
-};
-
-const manageDeploymentDeclaration: FunctionDeclaration = {
-  name: 'manage_deployment',
-  description: 'Trigger deployment builds, push code updates, restart cloud services, and inspect deployment logs.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      action: {
-        type: Type.STRING,
-        description: 'Action: "trigger_build", "deploy_environment", "restart_service", or "get_deploy_logs"',
-      },
-      serviceName: {
-        type: Type.STRING,
-        description: 'Service or project container name (e.g. "sonicmind-voice-applet")',
-      },
-      environment: {
-        type: Type.STRING,
-        description: 'Target environment: "production", "staging", or "development"',
-      },
-    },
-    required: ['action'],
-  },
-};
-
-const domainDataServicesDeclaration: FunctionDeclaration = {
-  name: 'domain_data_services',
-  description: 'Fetch weather forecasts, real-time stock ticker prices, geocoding maps/routes, or execute text translation.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      service: {
-        type: Type.STRING,
-        description: 'Service: "weather", "stocks", "maps_route", or "translation"',
-      },
-      query: {
-        type: Type.STRING,
-        description: 'Location name, stock symbol (e.g. "GOOGL"), origin/destination route, or phrase to translate',
-      },
-      sourceOrTargetLang: {
-        type: Type.STRING,
-        description: 'Language code pair for translation (e.g. "en->es", "ja->en")',
-      },
-    },
-    required: ['service', 'query'],
-  },
-};
-
-const crmSalesforceInternalDeclaration: FunctionDeclaration = {
-  name: 'crm_salesforce_internal',
-  description: 'Query or update CRM contacts/leads, opportunities, account stages, or invoke internal company REST API endpoints.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      action: {
-        type: Type.STRING,
-        description: 'Action: "search_leads", "get_contact", "update_deal_stage", or "call_internal_api"',
-      },
-      searchOrEntityId: {
-        type: Type.STRING,
-        description: 'Query phrase, lead/contact ID (e.g. "LEAD-9821"), or API route path',
-      },
-      payload: {
-        type: Type.STRING,
-        description: 'Optional JSON object string for updates or custom parameters',
-      },
-    },
-    required: ['action', 'searchOrEntityId'],
-  },
-};
-
-const paymentEcommerceActionsDeclaration: FunctionDeclaration = {
-  name: 'payment_ecommerce_actions',
-  description: 'Process payment intents, verify e-commerce order status, issue refunds, or query product catalog inventory.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      action: {
-        type: Type.STRING,
-        description: 'Action: "process_payment", "check_order_status", "issue_refund", or "search_inventory"',
-      },
-      amountOrOrderId: {
-        type: Type.STRING,
-        description: 'Payment amount (e.g. "$49.99"), Order ID (e.g. "ORD-9201"), or search query',
-      },
-      customerIdOrSku: {
-        type: Type.STRING,
-        description: 'Customer email/ID or product SKU number',
-      },
-    },
-    required: ['action', 'amountOrOrderId'],
-  },
-};
-
-const iotSmartHomeControlDeclaration: FunctionDeclaration = {
-  name: 'iot_smart_home_control',
-  description: 'Control IoT smart home devices (adjust thermostat, toggle lights, lock doors, control smart plugs, or trigger scenes).',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      deviceIdOrGroup: {
-        type: Type.STRING,
-        description: 'Device ID, group, or scene (e.g. "living_room_lights", "thermostat_main", "front_door_lock", "movie_night")',
-      },
-      command: {
-        type: Type.STRING,
-        description: 'Command: "turn_on", "turn_off", "set_temperature", "lock", "unlock", or "activate_scene"',
-      },
-      value: {
-        type: Type.STRING,
-        description: 'Target value (e.g. "72F", "80%", "warm white")',
-      },
-    },
-    required: ['deviceIdOrGroup', 'command'],
-  },
-};
-
-const customBusinessLogicDeclaration: FunctionDeclaration = {
-  name: 'custom_business_logic',
-  description: 'Execute tenant-defined custom business rules, calculation algorithms, approval workflows, or serverless script handlers.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      functionName: {
-        type: Type.STRING,
-        description: 'Custom function or rule name (e.g. "calculate_volume_discount", "evaluate_credit_risk", "trigger_approval_flow")',
-      },
-      inputParams: {
-        type: Type.STRING,
-        description: 'JSON object string containing custom input parameters',
-      },
-    },
-    required: ['functionName'],
   },
 };
 
@@ -1032,109 +366,6 @@ const toolSearchRetrievalDeclaration: FunctionDeclaration = {
       },
     },
     required: ['query'],
-  },
-};
-
-const multiAgentToolDelegationDeclaration: FunctionDeclaration = {
-  name: 'multi_agent_tool_delegation',
-  description: 'Multi-Agent orchestration tool. Allows a primary agent to spawn, delegate tasks to, or query specialized sub-agents (e.g. Research Specialist, Code Reviewer, Security Auditor, Data Analyst) as tool function calls.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      targetAgentRole: {
-        type: Type.STRING,
-        description: 'Target sub-agent role: "research_specialist", "code_architect", "security_auditor", "data_analyst", or "qa_tester"',
-      },
-      taskPrompt: {
-        type: Type.STRING,
-        description: 'Detailed prompt/task description delegated to the sub-agent',
-      },
-      contextMemory: {
-        type: Type.STRING,
-        description: 'Optional memory context or structured data payload passed to the sub-agent',
-      },
-      awaitResponse: {
-        type: Type.BOOLEAN,
-        description: 'Whether to await synchronous response (default true) or run asynchronously',
-      },
-    },
-    required: ['targetAgentRole', 'taskPrompt'],
-  },
-};
-
-const queryKnowledgeBaseDeclaration: FunctionDeclaration = {
-  name: 'query_knowledge_base',
-  description: 'Query internal knowledge base, memory repository, or vector document store for relevant context.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      topic: {
-        type: Type.STRING,
-        description: 'Topic or key search phrase for knowledge lookup',
-      },
-    },
-    required: ['topic'],
-  },
-};
-
-const runCodeInterpreterDeclaration: FunctionDeclaration = {
-  name: 'run_code_interpreter',
-  description: 'Execute Python, JavaScript, or TypeScript code in a sandboxed interpreter for algorithm testing, calculations, and data processing.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      code: {
-        type: Type.STRING,
-        description: 'Code snippet block to execute',
-      },
-      language: {
-        type: Type.STRING,
-        description: 'Programming language: "python", "javascript", or "typescript"',
-      },
-      args: {
-        type: Type.STRING,
-        description: 'Optional execution arguments or inputs',
-      },
-    },
-    required: ['code'],
-  },
-};
-
-const executeClawAgentDeclaration: FunctionDeclaration = {
-  name: 'execute_claw_agent',
-  description: 'Execute Open Claw autonomous web crawler and document scraper to extract live page structured content.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      url: {
-        type: Type.STRING,
-        description: 'Target URL to claw and extract data from',
-      },
-      extractionGoal: {
-        type: Type.STRING,
-        description: 'Specific information or data schema to extract',
-      },
-    },
-    required: ['url'],
-  },
-};
-
-const hermesReasoningStepDeclaration: FunctionDeclaration = {
-  name: 'hermes_reasoning_step',
-  description: 'Execute a Hermes (Nous Research) autonomous reasoning step with explicit scratchpad verification.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      scratchpad: {
-        type: Type.STRING,
-        description: 'Step-by-step reasoning thought process',
-      },
-      nextAction: {
-        type: Type.STRING,
-        description: 'Selected action or conclusion',
-      },
-    },
-    required: ['scratchpad', 'nextAction'],
   },
 };
 
@@ -1196,6 +427,79 @@ const updateAppSettingDeclaration: FunctionDeclaration = {
   },
 };
 
+// ── Real Composio connector control -- gives the agent direct voice
+// control over the same OAuth connections managed in Settings, not just
+// passive access to already-connected toolkits. ──
+const listComposioConnectionsDeclaration: FunctionDeclaration = {
+  name: 'list_composio_connections',
+  description: 'List the real Composio connector accounts currently connected (e.g. Gmail, GitHub, Slack) and their real status.',
+  parameters: { type: Type.OBJECT, properties: {} },
+};
+
+const searchComposioToolkitsDeclaration: FunctionDeclaration = {
+  name: 'search_composio_toolkits',
+  description: 'Search Composio\'s real ~1000-connector catalog by name/category (e.g. "salesforce", "project management") to find a toolkit to connect.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      query: { type: Type.STRING, description: 'Search term' },
+    },
+    required: ['query'],
+  },
+};
+
+const connectComposioToolkitDeclaration: FunctionDeclaration = {
+  name: 'connect_composio_toolkit',
+  description: 'Start a real OAuth connection for a Composio toolkit by slug (e.g. "github", "gmail"). Returns a real approval URL the user must open in a browser -- speak it or tell them to check Settings > OAuth. Requires owner unlock.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      toolkitSlug: { type: Type.STRING, description: 'Real Composio toolkit slug, e.g. "github"' },
+    },
+    required: ['toolkitSlug'],
+  },
+};
+
+const disconnectComposioToolkitDeclaration: FunctionDeclaration = {
+  name: 'disconnect_composio_toolkit',
+  description: 'Permanently disconnect a real Composio connector account by its connection id (from list_composio_connections). Destructive -- requires owner unlock AND confirmed=true after the user explicitly confirms.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      connectionId: { type: Type.STRING, description: 'Real connection id, e.g. "ca_..."' },
+      confirmed: { type: Type.BOOLEAN, description: 'Must be true; only set after explicit user confirmation' },
+    },
+    required: ['connectionId', 'confirmed'],
+  },
+};
+
+// ── Real multi-agent roster control -- lets the agent (once unlocked)
+// change who's in the conversation by voice instead of only via Settings. ──
+const addRosterMemberDeclaration: FunctionDeclaration = {
+  name: 'add_roster_member',
+  description: 'Add a participant to the real multi-agent roster for this conversation (backend: native, hermes, or open_claw). Requires owner unlock.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      backend: { type: Type.STRING, description: '"native", "hermes", or "open_claw"' },
+      voice: { type: Type.STRING, description: 'Gemini voice name to assign, e.g. "Puck"' },
+    },
+    required: ['backend'],
+  },
+};
+
+const removeRosterMemberDeclaration: FunctionDeclaration = {
+  name: 'remove_roster_member',
+  description: 'Remove a participant from the real multi-agent roster by backend id (native/hermes/open_claw). Requires owner unlock.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      backend: { type: Type.STRING, description: '"native", "hermes", or "open_claw"' },
+    },
+    required: ['backend'],
+  },
+};
+
 const queryMemoryVaultDeclaration: FunctionDeclaration = {
   name: 'query_memory_vault',
   description: 'Query or search the user memory vault across security tiers (secure, personal, regular) for remembered information.',
@@ -1245,45 +549,24 @@ const storeMemoryVaultDeclaration: FunctionDeclaration = {
   },
 };
 
+// Every tool below is real: it either does a genuine computation
+// (get_current_time, calculate), or bridges to a real live system
+// (Vantage MCP, Composio, owner-controls, the persistent memory vault).
+// This used to also include 29 "demo" tools (web search, email, GitHub,
+// database, deployment, weather, CRM, payments, IoT, etc) that were 100%
+// fabricated -- zero real network calls in any of their handlers,
+// confirmed by auditing every one. They're removed entirely rather than
+// left reachable, since a fabricated "web_search" or "manage_email" tool
+// sitting next to genuinely real Composio Gmail/GitHub/Slack access is
+// actively dangerous: the model has no way to tell them apart by name
+// alone, and could confidently act on or repeat fake results.
 const liveTools = [
   {
     functionDeclarations: [
-      getWeatherDeclaration,
       getCurrentTimeDeclaration,
-      webSearchDeclaration,
-      browseWebPageDeclaration,
-      fetchNewsFeedDeclaration,
-      wikipediaLookupDeclaration,
-      searchArxivPapersDeclaration,
-      analyzeVisualMediaDeclaration,
       calculateDeclaration,
-      executeTerminalCommandDeclaration,
-      runDataAnalysisDeclaration,
-      localFileSystemDeclaration,
-      automateBrowserDeclaration,
-      desktopComputerControlDeclaration,
-      readScreenOcrDeclaration,
-      manageEmailDeclaration,
-      sendChatMessageDeclaration,
-      manageCalendarEventsDeclaration,
-      manageDocsAndNotionDeclaration,
-      sendSmsNotificationDeclaration,
-      githubDevToolsDeclaration,
-      databaseQueryDeclaration,
-      makeHttpApiCallDeclaration,
-      manageDeploymentDeclaration,
-      domainDataServicesDeclaration,
-      crmSalesforceInternalDeclaration,
-      paymentEcommerceActionsDeclaration,
-      iotSmartHomeControlDeclaration,
-      customBusinessLogicDeclaration,
       mcpServerClientDeclaration,
       toolSearchRetrievalDeclaration,
-      multiAgentToolDelegationDeclaration,
-      queryKnowledgeBaseDeclaration,
-      runCodeInterpreterDeclaration,
-      executeClawAgentDeclaration,
-      hermesReasoningStepDeclaration,
       queryMemoryVaultDeclaration,
       storeMemoryVaultDeclaration,
       unlockOwnerControlsDeclaration,
@@ -1291,6 +574,12 @@ const liveTools = [
       setApiKeyDeclaration,
       removeApiKeyDeclaration,
       updateAppSettingDeclaration,
+      listComposioConnectionsDeclaration,
+      searchComposioToolkitsDeclaration,
+      connectComposioToolkitDeclaration,
+      disconnectComposioToolkitDeclaration,
+      addRosterMemberDeclaration,
+      removeRosterMemberDeclaration,
     ],
   },
 ];
@@ -1300,6 +589,7 @@ interface ToolCtx {
   ownerUnlocked: boolean;
   unlockOwner: () => void;
   applySettingOnClient?: (setting: string, value: string) => void;
+  applyRosterChange?: (action: 'add' | 'remove', backend: string, voice?: string) => void;
 }
 
 async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
@@ -1331,238 +621,12 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
       return { status: 'error', source: 'composio_mcp_live', message: err?.message || String(err) };
     }
   }
-  if (name === 'get_weather') {
-    const loc = args.location || 'San Francisco';
-    const mockWeathers: Record<string, string> = {
-      london: '15°C, overcast with light drizzle',
-      tokyo: '22°C, clear skies and pleasant breeze',
-      'san francisco': '18°C, sunny with foggy morning haze',
-      'new york': '24°C, partly cloudy with moderate humidity',
-      paris: '19°C, mild and clear',
-    };
-    const key = Object.keys(mockWeathers).find((k) => loc.toLowerCase().includes(k));
-    const result = key ? mockWeathers[key] : `21°C, sunny with mild breeze in ${loc}`;
-    return { location: loc, weather: result };
-  }
-
   if (name === 'get_current_time') {
     const now = new Date();
     return {
       time: now.toLocaleTimeString(),
       date: now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
       iso: now.toISOString(),
-    };
-  }
-
-  if (name === 'web_search') {
-    const query = args.query || '';
-    const engine = args.engine || 'Google Search';
-    const depth = args.searchDepth || 'deep';
-    return {
-      query,
-      engine,
-      searchDepth: depth,
-      totalResults: 1420,
-      timestamp: new Date().toISOString(),
-      topResults: [
-        {
-          title: `Comprehensive Guide & Verified Facts on ${query}`,
-          url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
-          snippet: `Authoritative live search data for "${query}". Key insights confirm recent developments, architectural consensus, and updated real-time benchmark statistics.`,
-          domain: 'search.google.com',
-          relevanceScore: 0.98,
-        },
-        {
-          title: `${query} - Live Technical Reference & Documentation`,
-          url: `https://en.wikipedia.org/wiki/${encodeURIComponent(query)}`,
-          snippet: `Detailed background, foundational concepts, and historical timeline relevant to ${query}. verified against global information databases.`,
-          domain: 'wikipedia.org',
-          relevanceScore: 0.94,
-        },
-        {
-          title: `Latest News & Real-Time Updates: ${query}`,
-          url: `https://news.google.com/search?q=${encodeURIComponent(query)}`,
-          snippet: `Breaking reports and real-time wire feed analysis regarding ${query} published within the last 24 hours.`,
-          domain: 'news.google.com',
-          relevanceScore: 0.91,
-        },
-      ],
-      summary: `Verified live web search synthesis for "${query}". Data retrieved via ${engine} (${depth} search mode).`,
-    };
-  }
-
-  if (name === 'browse_web_page') {
-    const url = args.url || 'https://example.com';
-    const format = args.extractFormat || 'markdown';
-    const maxChars = Number(args.maxCharacters) || 2500;
-    const cleanUrlHost = url.replace(/https?:\/\//, '').split('/')[0];
-
-    const bodyText = `[Extracted Web Content from ${url}]
-Page Title: ${cleanUrlHost} - Verified Technical Resource
-Canonical URL: ${url}
-HTTP Status: 200 OK | Content-Type: text/html; charset=utf-8
-
-## Executive Summary
-This document provides comprehensive technical details, specifications, and live operational guidelines parsed directly from ${cleanUrlHost}.
-
-## Key Topics & Section Headers
-1. Introduction & Foundational Architecture
-   - Standardized specs, high-throughput pipelines, and real-time latency targets.
-2. Core Implementations & API Reference
-   - Fully compliant function signatures, input schemas, and error boundaries.
-3. Performance Metrics & Best Practices
-   - Benchmark throughput tested across high-concurrency workloads.
-
-## Extracted Text Excerpt
-All DOM nodes have been parsed cleanly. Semantic headers (h1, h2, h3) and main article paragraph elements were extracted while filtering out navigational noise, header banners, and sidebar advertisements.`.slice(0, maxChars);
-
-    return {
-      url,
-      httpStatus: 200,
-      format,
-      pageTitle: `${cleanUrlHost} - Extracted Live Web Page`,
-      wordCount: bodyText.split(/\s+/).length,
-      extractedContent: bodyText,
-      metaDescription: `Clean scraped content from ${url} extracted via headless DOM browser.`,
-      linksFound: [
-        `https://${cleanUrlHost}/docs`,
-        `https://${cleanUrlHost}/api-reference`,
-        `https://${cleanUrlHost}/about`,
-      ],
-      status: 'page_parsed_successfully',
-    };
-  }
-
-  if (name === 'fetch_news_feed') {
-    const category = args.category || 'top_stories';
-    const keyword = args.keyword || '';
-    const country = args.country || 'GLOBAL';
-    const topicLabel = keyword ? `${category} ("${keyword}")` : category;
-
-    return {
-      category,
-      keywordFilter: keyword || 'None',
-      region: country,
-      fetchedAt: new Date().toISOString(),
-      totalHeadlines: 5,
-      headlines: [
-        {
-          title: `Major Technological & Real-Time AI Milestone Announced in ${topicLabel.toUpperCase()}`,
-          source: 'Reuters / TechWire',
-          publishedAgo: '22 minutes ago',
-          snippet: `Breaking coverage on ${topicLabel}: New benchmarks demonstrate significant performance gains in real-time streaming architectures and low-latency agent systems.`,
-          url: 'https://news.google.com',
-          verified: true,
-        },
-        {
-          title: `Global Industry Leaders Standardize Real-Time Multimodal Voice Protocols`,
-          source: 'Bloomberg News',
-          publishedAgo: '1 hour ago',
-          snippet: `Global standards body ratifies new latency specifications for speech-to-speech AI assistants and live websocket integrations.`,
-          url: 'https://bloomberg.com',
-          verified: true,
-        },
-        {
-          title: `Key Regulatory & Innovation Update: ${keyword || 'Artificial Intelligence & Robotics'}`,
-          source: 'Financial Times',
-          publishedAgo: '3 hours ago',
-          snippet: `Comprehensive wire analysis detailing economic impacts and market reception for ${keyword || 'AI research'} initiatives.`,
-          url: 'https://ft.com',
-          verified: true,
-        },
-      ],
-      trendingKeywords: ['Gemini Live', 'Realtime Audio', 'Low Latency S2S', 'Agentic Tools', topicLabel],
-    };
-  }
-
-  if (name === 'wikipedia_lookup') {
-    const topic = args.topic || 'Artificial Intelligence';
-    const section = args.section || 'Overview';
-
-    return {
-      queryTopic: topic,
-      canonicalTitle: topic.charAt(0).toUpperCase() + topic.slice(1),
-      wikipediaUrl: `https://en.wikipedia.org/wiki/${encodeURIComponent(topic)}`,
-      summary: `${topic} is a key domain of study encompassing theoretical principles, computational models, and practical applications. It includes structured knowledge representation, algorithmic processing, and empirical verification.`,
-      sectionFocus: section,
-      sectionContent: `[Section: ${section}] Detailed information regarding ${topic}. The field evolved through foundational mathematical research into scalable practical frameworks deployed globally.`,
-      infobox: {
-        'Domain Category': 'Information Science & Computer Systems',
-        'First Formalized': '20th Century',
-        'Primary Subfields': 'Machine Learning, Neural Networks, Speech Processing, Autonomous Agents',
-        'Key Standards': 'IEEE, ISO/IEC, W3C',
-      },
-      relatedArticles: [
-        'Neural Network Architecture',
-        'Speech Synthesis',
-        'Autonomous Agents',
-        'Information Theory',
-      ],
-      status: 'article_retrieved',
-    };
-  }
-
-  if (name === 'search_arxiv_papers') {
-    const query = args.query || 'Machine Learning';
-    const category = args.category || 'cs.AI';
-    const sortBy = args.sortBy || 'relevance';
-
-    return {
-      searchQuery: query,
-      arxivCategory: category,
-      sortBy,
-      totalMatched: 284,
-      retrievedAt: new Date().toISOString(),
-      papers: [
-        {
-          arxivId: 'arXiv:2608.09142v1',
-          title: `Ultra-Low Latency Speech-to-Speech Voice Agents via Server-Side Streaming: ${query}`,
-          authors: ['Dr. E. Vance', 'Prof. M. K. Thorne', 'S. Al-Mansoor'],
-          submittedDate: '2026-08-02',
-          primaryCategory: category,
-          abstract: `We present a novel paradigm for zero-buffer real-time multimodal interaction. By combining streaming neural vocoders with direct WebSocket frame multiplexing, our approach achieves sub-200ms end-to-end latency for voice assistants dealing with ${query}.`,
-          pdfUrl: 'https://arxiv.org/pdf/2608.09142.pdf',
-          arxivWebUrl: 'https://arxiv.org/abs/2608.09142',
-        },
-        {
-          arxivId: 'arXiv:2607.18409v2',
-          title: `Autonomous Tool Selection and Memory Vault Tiering in ReAct Agents`,
-          authors: ['Dr. A. Chen', 'L. Rodriguez'],
-          submittedDate: '2026-07-28',
-          primaryCategory: 'cs.CL',
-          abstract: `This paper explores security-aware memory tiering and dynamic function dispatching for autonomous AI agents performing multi-step research and real-time information retrieval.`,
-          pdfUrl: 'https://arxiv.org/pdf/2607.18409.pdf',
-          arxivWebUrl: 'https://arxiv.org/abs/2607.18409',
-        },
-      ],
-      status: 'arxiv_papers_retrieved',
-    };
-  }
-
-  if (name === 'analyze_visual_media') {
-    const mediaType = args.mediaType || 'image';
-    const target = args.analysisTarget || 'general_description';
-    const prompt = args.prompt || 'Analyze the visual scene in detail';
-
-    return {
-      mediaType,
-      analysisTarget: target,
-      promptQuery: prompt,
-      processedTimestamp: new Date().toISOString(),
-      sceneDescription: `The visual input (${mediaType}) depicts a clean, modern user interface canvas featuring a real-time audio visualizer, transcript stream, and active status indicators. The environment is well-lit with high contrast and balanced spacing.`,
-      detectedObjects: [
-        { label: 'Audio Waveform Visualizer', confidence: 0.99, boundingBox: [0.1, 0.2, 0.9, 0.4] },
-        { label: 'Live Transcript Panel', confidence: 0.97, boundingBox: [0.1, 0.45, 0.9, 0.85] },
-        { label: 'Microphone Control Bar', confidence: 0.98, boundingBox: [0.3, 0.88, 0.7, 0.98] },
-      ],
-      ocrExtractedText: [
-        'SonicMind S2S Live Connected',
-        'Realtime Speech-to-Speech Assistant',
-        'Information & Research Tools Active',
-      ],
-      colorPalette: ['#4F46E5 (Indigo)', '#10B981 (Emerald)', '#18181B (Zinc Dark)'],
-      spatialInsights: 'Central focus is aligned on the audio visualizer orb, flanked by responsive control buttons and transcript feed.',
-      status: 'vision_analysis_complete',
     };
   }
 
@@ -1641,537 +705,6 @@ All DOM nodes have been parsed cleanly. Semantic headers (h1, h2, h3) and main a
         status: 'calculation_error',
       };
     }
-  }
-
-  if (name === 'execute_terminal_command') {
-    const cmd = args.command || 'uptime';
-    const cwd = args.cwd || '.';
-    const startTime = Date.now();
-
-    // Simulated terminal environment output with safe local node execution info
-    let stdout = '';
-    let stderr = '';
-    let exitCode = 0;
-
-    if (cmd.includes('python') || cmd.includes('python3')) {
-      stdout = `Python 3.11.8 (main, Jan 24 2026, 10:15:30) [GCC 11.4.0 on linux]\nType "help", "copyright", "credits" or "license" for more information.\n[Terminal Command Output]: Executed python environment command successfully.`;
-    } else if (cmd.includes('node')) {
-      stdout = `v20.11.0 (Node.js runtime sandbox)\nExecution completed without warnings.`;
-    } else if (cmd.includes('ls') || cmd.includes('dir')) {
-      stdout = `drwxr-xr-x 12 node node 4096 Aug 6 15:00 .\ndrwxr-xr-x  3 node node 4096 Aug 6 14:00 ..\n-rw-r--r--  1 node node  850 Aug 6 14:30 package.json\n-rw-r--r--  1 node node  420 Aug 6 14:30 tsconfig.json\n-rw-r--r--  1 node node 1120 Aug 6 15:00 server.ts\ndrwxr-xr-x  5 node node 4096 Aug 6 15:00 src\ndrwxr-xr-x  2 node node 4096 Aug 6 15:00 public`;
-    } else if (cmd.includes('df') || cmd.includes('du')) {
-      stdout = `Filesystem     1K-blocks     Used Available Use% Mounted on\n/dev/root       10485760  2841020   7644740  28% /\ntmpfs             512000    12400    499600   3% /tmp`;
-    } else if (cmd.includes('uptime') || cmd.includes('top')) {
-      stdout = ` 15:00:23 up 4 days, 12:45,  1 user,  load average: 0.12, 0.08, 0.05\nTasks: 14 total, 1 running, 13 sleeping`;
-    } else {
-      stdout = `[Terminal Output for "${cmd}"]: Command executed successfully in directory "${cwd}". Exit code 0.`;
-    }
-
-    return {
-      command: cmd,
-      cwd,
-      exitCode,
-      stdout,
-      stderr,
-      executionTimeMs: Date.now() - startTime + 8,
-      status: 'completed',
-    };
-  }
-
-  if (name === 'run_data_analysis') {
-    const op = args.operation || 'sql_query';
-    const query = args.query || 'SELECT * FROM dataset';
-    const datasetRaw = args.datasetJson || '';
-
-    return {
-      operation: op,
-      executedQuery: query,
-      timestamp: new Date().toISOString(),
-      datasetRowsCount: 150,
-      columns: ['id', 'user_id', 'category', 'session_duration_sec', 'tokens_processed', 'accuracy_score'],
-      analysisSummary: {
-        totalRows: 150,
-        nullValues: 0,
-        meanDurationSec: 142.5,
-        totalTokensProcessed: 845200,
-        averageAccuracy: '98.4%',
-      },
-      sqlResults: [
-        { category: 'Voice Synthesis', count: 48, avg_tokens: 5820, avg_accuracy: 0.991 },
-        { category: 'Data & Computation', count: 52, avg_tokens: 6140, avg_accuracy: 0.982 },
-        { category: 'Research & Search', count: 50, avg_tokens: 4980, avg_accuracy: 0.979 },
-      ],
-      pandasDataframeOutput: `
-   category              count  mean_duration  accuracy
-0  Voice Synthesis          48         138.2s    0.991
-1  Data & Computation       52         155.6s    0.982
-2  Research & Search        50         132.8s    0.979
-      `.trim(),
-      status: 'data_analysis_completed',
-    };
-  }
-
-  if (name === 'local_file_system') {
-    const op = args.operation || 'read';
-    const filePath = args.filePath || 'package.json';
-
-    if (op === 'list') {
-      return {
-        operation: op,
-        directory: filePath,
-        files: [
-          { name: 'server.ts', type: 'file', size: '45 KB' },
-          { name: 'package.json', type: 'file', size: '1.2 KB' },
-          { name: 'tsconfig.json', type: 'file', size: '0.4 KB' },
-          { name: 'src', type: 'directory', itemsCount: 14 },
-          { name: 'public', type: 'directory', itemsCount: 4 },
-        ],
-        status: 'directory_listed',
-      };
-    }
-
-    if (op === 'read') {
-      return {
-        operation: op,
-        filePath,
-        fileContent: `// Content snippet for file "${filePath}"\n// Verified local file system access\n{ "name": "sonicmind-s2s-agent", "version": "1.0.0" }`,
-        fileSize: '1.2 KB',
-        lastModified: new Date().toISOString(),
-        status: 'file_read_success',
-      };
-    }
-
-    if (op === 'write' || op === 'edit') {
-      return {
-        operation: op,
-        filePath,
-        bytesWritten: (args.content || args.replacementContent || '').length,
-        status: 'file_write_success',
-        message: `Successfully updated "${filePath}".`,
-      };
-    }
-
-    return {
-      operation: op,
-      filePath,
-      status: 'file_op_completed',
-    };
-  }
-
-  if (name === 'automate_browser') {
-    const action = args.action || 'navigate';
-    const url = args.url || 'https://example.com';
-    const selector = args.selector || 'button#submit';
-    const text = args.text || '';
-    const script = args.script || '';
-
-    return {
-      action,
-      url: action === 'navigate' ? url : 'https://example.com/dashboard',
-      targetSelector: selector,
-      typedText: text || undefined,
-      executedScript: script || undefined,
-      browserEngine: 'Stagehand / Chromium Headless Sandbox',
-      viewport: { width: 1280, height: 800 },
-      domStatus: 'DOM rendered & interactive',
-      pageTitle: action === 'navigate' ? `Navigated to ${url}` : `Active Page - ${selector}`,
-      screenshotUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-      elementsFound: [
-        { selector: 'button#submit', label: 'Submit Form', isVisible: true, bounds: [450, 320, 120, 40] },
-        { selector: 'input[name="search"]', label: 'Search Input', isVisible: true, bounds: [200, 150, 400, 36] },
-      ],
-      status: 'browser_action_completed',
-    };
-  }
-
-  if (name === 'desktop_computer_control') {
-    const action = args.action || 'screenshot';
-    const posX = typeof args.coordinateX === 'number' ? args.coordinateX : 960;
-    const posY = typeof args.coordinateY === 'number' ? args.coordinateY : 540;
-    const clickType = args.clickType || 'left_click';
-    const keys = args.keys || '';
-
-    return {
-      action,
-      coordinates: { x: posX, y: posY },
-      clickType,
-      dispatchedKeys: keys || undefined,
-      displayResolution: '1920x1080 @ 60Hz',
-      virtualCursorState: { x: posX, y: posY, lastClickType: clickType },
-      screenState: {
-        activeWindow: 'Google Chrome - AI Studio Applet',
-        focusedControl: 'Interactive Visualizer Canvas',
-        timeCaptured: new Date().toISOString(),
-      },
-      status: 'computer_control_executed',
-    };
-  }
-
-  if (name === 'read_screen_ocr') {
-    const region = args.region || 'full_screen';
-    const cropBox = args.cropBox || '0, 0, 1920, 1080';
-    const keyword = args.keywordFilter || '';
-
-    return {
-      targetRegion: region,
-      cropCoordinates: cropBox,
-      keywordFilter: keyword || 'None',
-      detectedTextBlocksCount: 12,
-      ocrExtractedLines: [
-        'SonicMind Speech-to-Speech Realtime Voice Assistant',
-        'Status: Connected | Latency: 124ms | Audio Protocol: WebSocket PCM16',
-        'Browser & Computer Control Suite Enabled',
-        'Active Tools: Stagehand Automation, Screen OCR, Virtual Mouse/Keyboard',
-      ],
-      detectedElements: [
-        { text: 'Connected', boundingBox: [120, 45, 80, 22], confidence: 0.99 },
-        { text: 'Latency: 124ms', boundingBox: [220, 45, 110, 22], confidence: 0.98 },
-        { text: 'Start Session', boundingBox: [880, 500, 160, 44], confidence: 0.99 },
-      ],
-      status: 'screen_ocr_completed',
-    };
-  }
-
-  if (name === 'manage_email') {
-    const action = args.action || 'send';
-    const recipient = args.recipient || 'alex.dev@example.com';
-    const subject = args.subject || 'SonicMind Voice Assistant Session Update';
-    const body = args.body || 'Hello! The realtime speech-to-speech session completed successfully.';
-    const query = args.searchQuery || 'is:unread';
-
-    return {
-      action,
-      recipient,
-      subject,
-      bodyPreview: body.length > 100 ? body.substring(0, 100) + '...' : body,
-      queryFilter: query,
-      timestamp: new Date().toISOString(),
-      emailThreadId: 'msg_' + Math.floor(Math.random() * 899999 + 100000),
-      inboxResults: action === 'read_inbox' || action === 'search_messages' ? [
-        { id: 'msg_94102', sender: 'team@ai.studio', subject: 'API Quota Update & Performance Logs', snippet: 'Your Gemini 3.6 Flash realtime connection latency average is 124ms...', date: '14:20 PM' },
-        { id: 'msg_94103', sender: 'notifications@github.com', subject: 'Build Succeeded: main branch deploy', snippet: 'Workflow run #148 completed green on Cloud Run container...', date: '12:45 PM' },
-      ] : undefined,
-      status: 'email_operation_completed',
-    };
-  }
-
-  if (name === 'send_chat_message') {
-    const platform = args.platform || 'slack';
-    const channel = args.channelOrUser || '#general';
-    const message = args.message || 'Realtime agent task updated.';
-
-    return {
-      platform,
-      channelOrUser: channel,
-      dispatchedMessage: message,
-      messageId: 'chat_msg_' + Math.floor(Math.random() * 899999 + 100000),
-      timestamp: new Date().toISOString(),
-      delivered: true,
-      status: 'chat_message_sent',
-    };
-  }
-
-  if (name === 'manage_calendar_events') {
-    const action = args.action || 'list_events';
-    const title = args.title || 'SonicMind Architecture Sync';
-    const startTime = args.startTime || new Date(Date.now() + 86400000).toISOString();
-    const endTime = args.endTime || new Date(Date.now() + 90000000).toISOString();
-    const attendees = args.attendees || 'team@example.com';
-
-    return {
-      action,
-      eventTitle: title,
-      startTime,
-      endTime,
-      attendeesList: attendees.split(',').map((a) => a.trim()),
-      eventId: 'evt_' + Math.floor(Math.random() * 899999 + 100000),
-      calendarType: 'Google Calendar API',
-      upcomingEvents: action === 'list_events' ? [
-        { id: 'evt_101', title: 'Realtime Voice Agent Demo', start: '2026-08-07T10:00:00Z', duration: '45m', location: 'Google Meet' },
-        { id: 'evt_102', title: 'Multimodal Vision & Function Calling Review', start: '2026-08-07T14:30:00Z', duration: '30m', location: 'Conference Room B' },
-      ] : undefined,
-      status: 'calendar_operation_completed',
-    };
-  }
-
-  if (name === 'manage_docs_and_notion') {
-    const provider = args.provider || 'notion';
-    const action = args.action || 'read_page';
-    const docId = args.documentId || 'page_98241';
-    const content = args.content || '';
-
-    return {
-      provider,
-      action,
-      documentId: docId,
-      contentLength: content.length,
-      lastModified: new Date().toISOString(),
-      documentSnapshot: provider === 'notion' ? {
-        title: 'SonicMind Project Knowledge Hub',
-        blocksCount: 24,
-        author: 'AI Agent Runtime',
-        snippet: 'Comprehensive function declaration specs, real-time audio pipeline buffers, and memory vault indexes...',
-      } : {
-        title: 'Google Docs / Sheets Export Sheet',
-        rowsUpdated: 1,
-        sheetName: 'Session Latencies Log',
-      },
-      status: 'docs_notion_operation_completed',
-    };
-  }
-
-  if (name === 'send_sms_notification') {
-    const type = args.type || 'sms';
-    const phone = args.phoneNumber || '+14155552671';
-    const message = args.message || 'SonicMind Alert: Session metrics compiled successfully.';
-
-    return {
-      type,
-      recipient: type === 'sms' ? phone : 'Desktop Notification Service',
-      messageText: message,
-      notificationId: 'notif_' + Math.floor(Math.random() * 899999 + 100000),
-      timestamp: new Date().toISOString(),
-      status: 'notification_delivered',
-    };
-  }
-
-  if (name === 'github_dev_tools') {
-    const action = args.action || 'search_repos';
-    const repo = args.repo || 'google-gemini/sonicmind-assistant';
-    const query = args.filePathOrQuery || 'multimodal speech';
-    const title = args.title || 'Feature Request: Advanced WebRTC Audio Streaming';
-    const branch = args.branch || 'main';
-
-    return {
-      action,
-      repository: repo,
-      branchName: branch,
-      query,
-      issueOrPrTitle: title,
-      issueOrPrNumber: Math.floor(Math.random() * 899 + 101),
-      commitHash: 'a7f9b' + Math.floor(Math.random() * 8999 + 1000),
-      timestamp: new Date().toISOString(),
-      searchResults: action === 'search_repos' ? [
-        { name: 'google-gemini/sonicmind-assistant', stars: 1240, forks: 180, language: 'TypeScript' },
-        { name: 'google-gemini/genai-live-api-starter', stars: 890, forks: 95, language: 'TypeScript' },
-      ] : undefined,
-      codePreview: action === 'read_code' ? `export const realtimeAudioPipeline = async (stream: MediaStream) => {\n  console.log("Connecting PCM16 stream to Gemini Live API...");\n};` : undefined,
-      status: 'github_operation_completed',
-    };
-  }
-
-  if (name === 'database_query') {
-    const dbType = args.dbType || 'sql_postgres';
-    const action = args.action || 'execute_query';
-    const query = args.queryOrVector || 'SELECT * FROM sessions ORDER BY timestamp DESC LIMIT 5;';
-    const topK = args.topK || 5;
-
-    return {
-      dbType,
-      action,
-      executedQuery: query,
-      rowsReturned: action === 'execute_query' ? 5 : topK,
-      executionTimeMs: 14,
-      queryResults: dbType.startsWith('sql') ? [
-        { session_id: 'sess_9012', user_email: 'swibe@example.com', latency_ms: 124, status: 'active' },
-        { session_id: 'sess_9011', user_email: 'swibe@example.com', latency_ms: 118, status: 'completed' },
-      ] : [
-        { vector_id: 'vec_401', similarity_score: 0.941, metadata: { text: 'Gemini Live WebSocket streaming specs' } },
-        { vector_id: 'vec_402', similarity_score: 0.887, metadata: { text: 'Hermes 3 reasoning prompt structure' } },
-      ],
-      status: 'database_query_completed',
-    };
-  }
-
-  if (name === 'make_http_api_call') {
-    const method = args.method || 'GET';
-    const url = args.url || 'https://api.github.com/zen';
-    const headers = args.headers || '{}';
-
-    return {
-      method,
-      endpointUrl: url,
-      statusCode: 200,
-      statusText: 'OK',
-      responseTimeMs: 86,
-      headersReceived: {
-        'content-type': 'application/json',
-        'x-ratelimit-remaining': '4980',
-      },
-      responseBody: method === 'GET' ? { message: 'Practicality beats purity.', timestamp: new Date().toISOString() } : { status: 'created', success: true },
-      status: 'http_request_completed',
-    };
-  }
-
-  if (name === 'manage_deployment') {
-    const action = args.action || 'trigger_build';
-    const service = args.serviceName || 'sonicmind-voice-applet';
-    const env = args.environment || 'production';
-
-    return {
-      action,
-      serviceName: service,
-      environment: env,
-      buildId: 'build_' + Math.floor(Math.random() * 899999 + 100000),
-      revision: 'v1.4.2-prod',
-      logs: [
-        'Container build initiated via Dockerfile...',
-        'TypeScript compilation succeeded. 0 errors.',
-        'Bundling dist/server.cjs via esbuild...',
-        'Cloud Run service deployment complete. Health check 200 OK.',
-      ],
-      status: 'deployment_operation_completed',
-    };
-  }
-
-  if (name === 'domain_data_services') {
-    const service = args.service || 'weather';
-    const query = args.query || 'San Francisco, CA';
-    const langPair = args.sourceOrTargetLang || 'en->es';
-
-    if (service === 'weather') {
-      return {
-        service: 'weather',
-        location: query,
-        temperature: '68°F (20°C)',
-        condition: 'Partly Cloudy with light onshore breeze',
-        humidity: '62%',
-        windSpeed: '9 mph NW',
-        forecast3Day: [
-          { day: 'Today', high: '68°F', low: '54°F', condition: 'Partly Cloudy' },
-          { day: 'Tomorrow', high: '71°F', low: '55°F', condition: 'Sunny' },
-          { day: 'Day After', high: '69°F', low: '53°F', condition: 'Morning Fog' },
-        ],
-        status: 'weather_retrieved',
-      };
-    }
-
-    if (service === 'stocks') {
-      const ticker = query.toUpperCase();
-      return {
-        service: 'stocks',
-        symbol: ticker,
-        companyName: ticker === 'GOOGL' ? 'Alphabet Inc.' : `${ticker} Corp`,
-        currentPrice: 178.45,
-        change: '+2.35 (+1.33%)',
-        dayHigh: 180.10,
-        dayLow: 176.20,
-        volume: '24,810,400',
-        marketCap: '$2.21T',
-        status: 'stock_quote_retrieved',
-      };
-    }
-
-    if (service === 'maps_route') {
-      return {
-        service: 'maps_route',
-        route: query,
-        distance: '14.2 miles',
-        estimatedDuration: '22 mins',
-        trafficStatus: 'Light traffic via US-101 N',
-        waypoints: ['Market St', 'US-101 N', 'Van Ness Ave'],
-        geocodedCoords: { lat: 37.7749, lng: -122.4194 },
-        status: 'route_calculated',
-      };
-    }
-
-    // Translation
-    return {
-      service: 'translation',
-      originalText: query,
-      languagePair: langPair,
-      translatedText: langPair.includes('es') ? '¡Hola! La integración en tiempo real del agente de voz Gemini está activa.' : `Translated (${langPair}): ${query}`,
-      confidenceScore: 0.99,
-      status: 'translation_completed',
-    };
-  }
-
-  if (name === 'crm_salesforce_internal') {
-    const action = args.action || 'search_leads';
-    const target = args.searchOrEntityId || 'Acme Corp';
-
-    return {
-      action,
-      queryOrEntity: target,
-      crmSystem: 'Salesforce Enterprise Hub',
-      matchedRecords: [
-        { id: 'LEAD-9012', name: 'Sarah Jenkins', company: 'Acme Corp', title: 'VP of Engineering', dealValue: '$120,000', stage: 'Negotiation' },
-        { id: 'CONTACT-4011', name: 'Michael Chen', company: 'Acme Corp', title: 'Lead Architect', email: 'm.chen@acme.com' },
-      ],
-      updatedStatus: action === 'update_deal_stage' ? 'Stage updated to "Closed Won"' : undefined,
-      timestamp: new Date().toISOString(),
-      status: 'crm_action_completed',
-    };
-  }
-
-  if (name === 'payment_ecommerce_actions') {
-    const action = args.action || 'check_order_status';
-    const target = args.amountOrOrderId || 'ORD-9821';
-
-    return {
-      action,
-      referenceId: target,
-      gateway: 'Stripe Payments / E-Commerce Storefront',
-      transactionDetails: action === 'process_payment' ? {
-        chargeId: 'ch_3M' + Math.floor(Math.random() * 899999 + 100000),
-        amount: target,
-        currency: 'USD',
-        status: 'succeeded',
-        receiptUrl: 'https://pay.stripe.com/receipts/acct_102',
-      } : {
-        orderId: target,
-        fulfillmentStatus: 'Shipped via FedEx Express',
-        trackingNumber: 'FX-77890123491',
-        estimatedDelivery: 'Tomorrow, 2:00 PM',
-        items: [
-          { sku: 'SKU-VOICE-MIC', name: 'Studio USB Micro-Condenser Mic', qty: 1, price: '$149.00' },
-        ],
-      },
-      status: 'ecommerce_action_completed',
-    };
-  }
-
-  if (name === 'iot_smart_home_control') {
-    const device = args.deviceIdOrGroup || 'living_room_lights';
-    const command = args.command || 'turn_on';
-    const value = args.value || '80% brightness';
-
-    return {
-      deviceId: device,
-      executedCommand: command,
-      appliedValue: value,
-      hubStatus: 'Smart Home Matter / Zigbee Gateway Connected',
-      deviceState: {
-        power: command === 'turn_off' ? 'OFF' : 'ON',
-        brightness: value,
-        temperature: device.includes('thermostat') ? value : undefined,
-        lockState: command === 'lock' ? 'LOCKED' : command === 'unlock' ? 'UNLOCKED' : undefined,
-      },
-      timestamp: new Date().toISOString(),
-      status: 'iot_device_updated',
-    };
-  }
-
-  if (name === 'custom_business_logic') {
-    const funcName = args.functionName || 'calculate_volume_discount';
-    const inputParams = args.inputParams || '{}';
-
-    return {
-      functionName: funcName,
-      inputParamsParsed: inputParams,
-      executionEngine: 'V8 Serverless Rule Engine',
-      result: {
-        success: true,
-        computedOutput: {
-          discountPercentage: 15.0,
-          qualifiesForEnterpriseTier: true,
-          nextTierThreshold: '50,000 units',
-          calculatedTotal: '$42,500.00',
-        },
-      },
-      executionTimeMs: 4,
-      status: 'custom_logic_executed',
-    };
   }
 
   if (name === 'mcp_server_client') {
@@ -2295,109 +828,6 @@ All DOM nodes have been parsed cleanly. Semantic headers (h1, h2, h3) and main a
     };
   }
 
-  if (name === 'multi_agent_tool_delegation') {
-    const role = args.targetAgentRole || 'research_specialist';
-    const task = args.taskPrompt || 'Perform deep analysis on request';
-    const awaitResp = args.awaitResponse !== false;
-
-    return {
-      delegationId: 'del_' + Math.random().toString(36).substring(2, 9),
-      targetAgentRole: role,
-      taskAssigned: task,
-      synchronous: awaitResp,
-      agentState: {
-        agentName: role.toUpperCase().replace('_', ' ') + ' BOT',
-        status: 'COMPLETED',
-        reasoningSteps: [
-          'Decomposed prompt into sub-objectives',
-          'Queried relevant domain knowledge & tools',
-          'Synthesized final response payload',
-        ],
-        outputSummary: `[Sub-Agent ${role}] Task completed successfully: "${task.substring(0, 80)}...". All verification constraints passed.`,
-      },
-      tokensUtilized: 342,
-      executionDurationMs: 820,
-      timestamp: new Date().toISOString(),
-      status: 'multi_agent_delegation_success',
-    };
-  }
-
-  if (name === 'query_knowledge_base') {
-    const topic = args.topic || 'General Knowledge';
-    return {
-      topic,
-      matchedDocuments: [
-        { id: 'doc-01', title: `System Reference for ${topic}`, confidence: 0.96, summary: `Verified knowledge base entry regarding ${topic} with structured domain context.` },
-        { id: 'doc-02', title: `Architectural Specs & Best Practices`, confidence: 0.89, summary: `Operational guidelines and function specs for ${topic}.` },
-      ],
-      status: 'knowledge_retrieved',
-    };
-  }
-
-  if (name === 'run_code_interpreter') {
-    const code = args.code || '';
-    const lang = args.language || 'javascript';
-    const startTime = Date.now();
-
-    try {
-      if (lang === 'python') {
-        return {
-          language: 'python',
-          code,
-          stdout: `[Python 3.11 Sandbox Output]\nExecuting code block...\n--- Execution Logs ---\nSuccess. Evaluated result: ${code.includes('print') ? 'Printed to stdout successfully' : 'Return value computed.'}`,
-          stderr: '',
-          returnVal: '0',
-          executionTimeMs: Date.now() - startTime + 12,
-          status: 'success',
-        };
-      }
-
-      const cleanCode = String(code).replace(/process|require|import|eval|Function/g, '');
-      const evaluated = new Function(`"use strict"; return (${cleanCode});`)();
-
-      return {
-        language: lang,
-        code,
-        stdout: String(evaluated),
-        stderr: '',
-        executionTimeMs: Date.now() - startTime + 5,
-        status: 'success',
-      };
-    } catch (err: any) {
-      return {
-        language: lang,
-        code,
-        stdout: `Code block executed in sandbox. Output captured.`,
-        stderr: err?.message || '',
-        executionTimeMs: Date.now() - startTime + 4,
-        status: 'completed_with_logs',
-      };
-    }
-  }
-
-  if (name === 'execute_claw_agent') {
-    const url = args.url || 'https://example.com';
-    const goal = args.extractionGoal || 'general content';
-    return {
-      url,
-      extractionGoal: goal,
-      status: 'claw_successful',
-      scrapedTitle: `Open Claw Extracted Page: ${url}`,
-      extractedContent: `Autonomous clawing completed for ${url}. Extracted key structured content matching goal "${goal}". All DOM elements parsed cleanly.`,
-    };
-  }
-
-  if (name === 'hermes_reasoning_step') {
-    return {
-      framework: 'Hermes (Nous Research)',
-      scratchpadVerified: true,
-      nextAction: args.nextAction || 'Proceed to final response synthesis',
-      status: 'reasoning_complete',
-    };
-  }
-
-  // Real, file-persisted memory vault -- replaces the previous hardcoded
-  // fabricated entries. 'secure' tier reads/writes require owner unlock.
   if (name === 'query_memory_vault') {
     const query = (args.searchQuery || '').toLowerCase();
     const tier = args.tier;
@@ -2493,6 +923,73 @@ All DOM nodes have been parsed cleanly. Semantic headers (h1, h2, h3) and main a
     }
     ctx.applySettingOnClient(String(args.setting || ''), String(args.value ?? ''));
     return { status: 'ok', message: `Setting "${args.setting}" updated.` };
+  }
+
+  // ── Real Composio connector control ──
+  if (name === 'list_composio_connections') {
+    if (!isComposioConfigured()) return { status: 'error', message: 'Composio is not configured on this server.' };
+    try {
+      const connections = await listRealConnections();
+      return { status: 'ok', connections };
+    } catch (err: any) {
+      return { status: 'error', message: err?.message || String(err) };
+    }
+  }
+
+  if (name === 'search_composio_toolkits') {
+    if (!isComposioConfigured()) return { status: 'error', message: 'Composio is not configured on this server.' };
+    try {
+      const all = await listAllToolkits();
+      const q = String(args.query || '').toLowerCase();
+      const matched = all.filter((t) => t.name.toLowerCase().includes(q) || t.slug.toLowerCase().includes(q) || t.category.toLowerCase().includes(q)).slice(0, 10);
+      return { status: 'ok', matched };
+    } catch (err: any) {
+      return { status: 'error', message: err?.message || String(err) };
+    }
+  }
+
+  if (name === 'connect_composio_toolkit') {
+    if (!ctx.ownerUnlocked) return { status: 'owner_unlock_required', message: 'Say the owner PIN first to unlock this.' };
+    if (!isComposioConfigured()) return { status: 'error', message: 'Composio is not configured on this server.' };
+    try {
+      const { redirectUrl } = await startRealOAuth(String(args.toolkitSlug || ''));
+      return { status: 'ok', redirectUrl, message: `Open this URL to approve: ${redirectUrl}` };
+    } catch (err: any) {
+      return { status: 'error', message: err?.message || String(err) };
+    }
+  }
+
+  if (name === 'disconnect_composio_toolkit') {
+    if (!ctx.ownerUnlocked) return { status: 'owner_unlock_required', message: 'Say the owner PIN first to unlock this.' };
+    if (!args.confirmed) {
+      return { status: 'confirmation_required', message: 'Disconnecting cannot be undone. Ask the user to confirm, then call again with confirmed=true.' };
+    }
+    try {
+      await deleteRealConnection(String(args.connectionId || ''));
+      return { status: 'ok', message: 'Disconnected.' };
+    } catch (err: any) {
+      return { status: 'error', message: err?.message || String(err) };
+    }
+  }
+
+  // ── Real multi-agent roster control ──
+  if (name === 'add_roster_member') {
+    if (!ctx.ownerUnlocked) return { status: 'owner_unlock_required', message: 'Say the owner PIN first to unlock this.' };
+    if (!ctx.applyRosterChange) return { status: 'error', message: 'No active client session.' };
+    const backend = String(args.backend || '');
+    if (!['native', 'hermes', 'open_claw'].includes(backend)) {
+      return { status: 'error', message: 'backend must be native, hermes, or open_claw' };
+    }
+    ctx.applyRosterChange('add', backend, args.voice ? String(args.voice) : undefined);
+    return { status: 'ok', message: `${backend} added to the roster.` };
+  }
+
+  if (name === 'remove_roster_member') {
+    if (!ctx.ownerUnlocked) return { status: 'owner_unlock_required', message: 'Say the owner PIN first to unlock this.' };
+    if (!ctx.applyRosterChange) return { status: 'error', message: 'No active client session.' };
+    const backend = String(args.backend || '');
+    ctx.applyRosterChange('remove', backend);
+    return { status: 'ok', message: `${backend} removed from the roster.` };
   }
 
   return { status: 'executed', result: 'Tool completed successfully' };
@@ -3394,7 +1891,7 @@ wss.on('connection', (clientWs: WebSocket) => {
       // real and destructive-capable, gated behind unlock_owner_controls
       // (spoken PIN) and, for anything irreversible, an explicit confirmed
       // flag -- both enforced server-side, not just by this instruction.
-      systemInstruction = `${systemInstruction}\n\nOwner controls: you have list_api_keys, set_api_key, remove_api_key, update_app_setting, and secure-tier memory vault access -- but ALL of them are locked until the user speaks or types their owner PIN and you call unlock_owner_controls(pin). Never guess or make up a PIN, never state or repeat the PIN back out loud once given, and never claim a tool succeeded unless its actual response says so. Before calling remove_api_key or overwriting an existing set_api_key/memory item, always say out loud exactly what you're about to do and wait for the user to clearly confirm before calling the tool again with confirmed=true -- do not skip this even if asked to "just do it."`;
+      systemInstruction = `${systemInstruction}\n\nOwner controls: you have list_api_keys, set_api_key, remove_api_key, update_app_setting, add_roster_member, remove_roster_member, connect_composio_toolkit, disconnect_composio_toolkit, and secure-tier memory vault access -- but ALL of them are locked until the user speaks or types their owner PIN and you call unlock_owner_controls(pin). Never guess or make up a PIN, never state or repeat the PIN back out loud once given, and never claim a tool succeeded unless its actual response says so. Before calling remove_api_key, disconnect_composio_toolkit, or overwriting an existing set_api_key/memory item, always say out loud exactly what you're about to do and wait for the user to clearly confirm before calling the tool again with confirmed=true -- do not skip this even if asked to "just do it."\n\nFor real integrations you don't need owner unlock: list_composio_connections and search_composio_toolkits are always available so you can check what's connected or find a toolkit to recommend connecting.`;
 
       const framework = config.agentFramework || 'native';
       activeFramework = framework;
@@ -3624,6 +2121,13 @@ wss.on('connection', (clientWs: WebSocket) => {
                       unlockOwner: () => { ownerUnlocked = true; },
                       applySettingOnClient: (setting, value) => {
                         sendToClient(clientWs, { type: 'apply_setting', toolName: setting, text: value });
+                      },
+                      applyRosterChange: (action, backend, voice) => {
+                        sendToClient(clientWs, {
+                          type: 'apply_roster_change',
+                          toolName: action,
+                          text: JSON.stringify({ backend, voice }),
+                        });
                       },
                     });
                     responses.push({
