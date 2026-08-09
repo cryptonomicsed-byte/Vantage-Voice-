@@ -4,12 +4,15 @@ import { AVAILABLE_VOICES, SYSTEM_PERSONAS, TRANSLATION_LANGUAGES } from '../lib
 import { X, Sparkles, Volume2, Sliders, Globe, Wrench, Shield, Check, Mic, Bot, Terminal, FileText, Cpu, Brain, ShieldCheck, Key, ExternalLink } from 'lucide-react';
 import type { OAuthAccount } from './OAuthIntegrationsModal';
 
+type SettingsTab = 'persona' | 'voice' | 'agent' | 'oauth' | 'translation' | 'audio';
+
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   settings: AppSettings;
   onSaveSettings: (newSettings: AppSettings) => void;
   onOpenOAuthModal?: () => void;
+  initialTab?: SettingsTab;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -18,9 +21,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   settings,
   onSaveSettings,
   onOpenOAuthModal,
+  initialTab,
 }) => {
   const [localSettings, setLocalSettings] = useState<AppSettings>({ ...settings });
-  const [activeTab, setActiveTab] = useState<'persona' | 'voice' | 'agent' | 'oauth' | 'translation' | 'audio'>('persona');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'persona');
+
+  useEffect(() => {
+    if (isOpen && initialTab) setActiveTab(initialTab);
+  }, [isOpen, initialTab]);
   const [realConnections, setRealConnections] = useState<{ toolkitSlug: string; status: string; createdAt: string }[]>([]);
 
   useEffect(() => {

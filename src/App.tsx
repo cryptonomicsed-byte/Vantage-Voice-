@@ -22,13 +22,6 @@ import { TranscriptView } from './components/TranscriptView';
 import { SettingsModal } from './components/SettingsModal';
 import { SessionSummaryModal } from './components/SessionSummaryModal';
 import { MemoryVaultModal } from './components/MemoryVaultModal';
-import { ResearchToolsModal } from './components/ResearchToolsModal';
-import { CodeComputationModal } from './components/CodeComputationModal';
-import { BrowserComputerControlModal } from './components/BrowserComputerControlModal';
-import { CommunicationProductivityModal } from './components/CommunicationProductivityModal';
-import { DevSoftwareToolsModal } from './components/DevSoftwareToolsModal';
-import { DomainCustomToolsModal } from './components/DomainCustomToolsModal';
-import { ModernMetaToolsModal } from './components/ModernMetaToolsModal';
 import { OAuthIntegrationsModal } from './components/OAuthIntegrationsModal';
 import { VantageHubModal } from './components/VantageHubModal';
 import { useCreationJob } from './hooks/useCreationJob';
@@ -99,6 +92,7 @@ export default function App() {
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [transcripts, setTranscripts] = useState<TranscriptItem[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'persona' | 'voice' | 'agent' | 'oauth' | 'translation' | 'audio' | undefined>(undefined);
   const [userVolumeRMS, setUserVolumeRMS] = useState<number>(0);
   const [userPeakLevel, setUserPeakLevel] = useState<number>(0);
   const [aiVolumeRMS, setAiVolumeRMS] = useState<number>(0);
@@ -109,27 +103,6 @@ export default function App() {
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState<boolean>(false);
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
-
-  // Research Tools Modal State
-  const [isResearchToolsOpen, setIsResearchToolsOpen] = useState<boolean>(false);
-
-  // Code & Computation Modal State
-  const [isCodeComputationOpen, setIsCodeComputationOpen] = useState<boolean>(false);
-
-  // Browser & Computer Control Modal State
-  const [isComputerControlOpen, setIsComputerControlOpen] = useState<boolean>(false);
-
-  // Communication & Productivity Modal State
-  const [isCommunicationToolsOpen, setIsCommunicationToolsOpen] = useState<boolean>(false);
-
-  // Development & Software Modal State
-  const [isDevToolsOpen, setIsDevToolsOpen] = useState<boolean>(false);
-
-  // Domain-Specific & Custom Modal State
-  const [isDomainCustomToolsOpen, setIsDomainCustomToolsOpen] = useState<boolean>(false);
-
-  // Modern Standards & Meta-Tools Modal State
-  const [isModernMetaToolsOpen, setIsModernMetaToolsOpen] = useState<boolean>(false);
 
   // Vantage Agent Platform & MCP Hub Modal State
   const [isVantageHubOpen, setIsVantageHubOpen] = useState<boolean>(false);
@@ -1094,16 +1067,13 @@ export default function App() {
         onToggleTheme={() =>
           setSettings((prev) => ({ ...prev, theme: prev.theme === 'dark' ? 'light' : 'dark' }))
         }
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={() => { setSettingsInitialTab(undefined); setIsSettingsOpen(true); }}
         onOpenOAuthModal={() => setIsOAuthModalOpen(true)}
-        onOpenResearchTools={() => setIsResearchToolsOpen(true)}
-        onOpenCodeComputation={() => setIsCodeComputationOpen(true)}
-        onOpenComputerControl={() => setIsComputerControlOpen(true)}
-        onOpenCommunicationTools={() => setIsCommunicationToolsOpen(true)}
-        onOpenDevTools={() => setIsDevToolsOpen(true)}
-        onOpenDomainCustomTools={() => setIsDomainCustomToolsOpen(true)}
-        onOpenModernMetaTools={() => setIsModernMetaToolsOpen(true)}
         onOpenVantageHub={() => setIsVantageHubOpen(true)}
+        onOpenAgents={() => {
+          setSettingsInitialTab('agent');
+          setIsSettingsOpen(true);
+        }}
         timeToFirstAudioMs={latencyMetrics.timeToFirstAudioMs}
         translationMode={settings.translationMode}
         targetLanguage={settings.targetLanguage}
@@ -1209,7 +1179,7 @@ export default function App() {
               onInterrupt={handleInterrupt}
               onClearTranscripts={handleClearTranscripts}
               onExportTranscripts={handleExportTranscripts}
-              onOpenSettings={() => setIsSettingsOpen(true)}
+              onOpenSettings={() => { setSettingsInitialTab(undefined); setIsSettingsOpen(true); }}
               onOpenMemoryVault={() => setIsMemoryVaultOpen(true)}
               memoryCount={memories.length}
               memoryBreakdown={memoryBreakdown}
@@ -1281,6 +1251,7 @@ export default function App() {
         settings={settings}
         onSaveSettings={handleSaveSettings}
         onOpenOAuthModal={() => setIsOAuthModalOpen(true)}
+        initialTab={settingsInitialTab}
       />
 
       {/* OAuth & Multi-Platform Integration Hub Modal */}
@@ -1309,48 +1280,6 @@ export default function App() {
         onClearAllMemories={handleClearAllMemories}
         onImportMemories={handleImportMemories}
         onSyncToExternalVault={pushMemoriesToExternalVault}
-      />
-
-      {/* Information & Research Tools Modal */}
-      <ResearchToolsModal
-        isOpen={isResearchToolsOpen}
-        onClose={() => setIsResearchToolsOpen(false)}
-      />
-
-      {/* Code & Computation Engine Modal */}
-      <CodeComputationModal
-        isOpen={isCodeComputationOpen}
-        onClose={() => setIsCodeComputationOpen(false)}
-      />
-
-      {/* Browser & Computer Control Suite Modal */}
-      <BrowserComputerControlModal
-        isOpen={isComputerControlOpen}
-        onClose={() => setIsComputerControlOpen(false)}
-      />
-
-      {/* Communication & Productivity Suite Modal */}
-      <CommunicationProductivityModal
-        isOpen={isCommunicationToolsOpen}
-        onClose={() => setIsCommunicationToolsOpen(false)}
-      />
-
-      {/* Development & Software Toolset Modal */}
-      <DevSoftwareToolsModal
-        isOpen={isDevToolsOpen}
-        onClose={() => setIsDevToolsOpen(false)}
-      />
-
-      {/* Domain-Specific & Custom Toolset Modal */}
-      <DomainCustomToolsModal
-        isOpen={isDomainCustomToolsOpen}
-        onClose={() => setIsDomainCustomToolsOpen(false)}
-      />
-
-      {/* Modern Standards & Meta-Tools Modal */}
-      <ModernMetaToolsModal
-        isOpen={isModernMetaToolsOpen}
-        onClose={() => setIsModernMetaToolsOpen(false)}
       />
 
       {/* Vantage Agent Platform & MCP Hub Modal */}

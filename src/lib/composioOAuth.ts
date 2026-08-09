@@ -28,6 +28,26 @@ export function isComposioConfigured(): boolean {
   return Boolean(COMPOSIO_API_KEY);
 }
 
+// Real toolkit slugs (confirmed against Composio's live catalog: gmail,
+// github, google-calendar, etc) are lowercase alphanumeric with
+// underscores/hyphens. These functions are reachable directly from HTTP
+// route params (/api/oauth/:toolkit/connect) -- validate before an
+// arbitrary path segment reaches the Composio SDK.
+const SLUG_RE = /^[a-z0-9_-]{1,64}$/;
+function assertValidSlug(slug: string): void {
+  if (!SLUG_RE.test(slug)) {
+    throw new Error(`Invalid toolkit slug: "${slug}"`);
+  }
+}
+
+// Composio's real connected-account IDs are "ca_" + alphanumerics.
+const CONNECTION_ID_RE = /^ca_[A-Za-z0-9_-]{1,64}$/;
+function assertValidConnectionId(id: string): void {
+  if (!CONNECTION_ID_RE.test(id)) {
+    throw new Error(`Invalid connection id: "${id}"`);
+  }
+}
+
 export interface RealConnectedAccount {
   id: string;
   toolkitSlug: string;
@@ -56,6 +76,7 @@ export async function listRealConnections(): Promise<RealConnectedAccount[]> {
  * so re-connecting doesn't hit Composio's alias-collision error.
  */
 export async function startRealOAuth(toolkitSlug: string): Promise<{ redirectUrl: string; connectionId: string }> {
+  assertValidSlug(toolkitSlug);
   const composio = getClient();
   const alias = `vantage-voice-${toolkitSlug}`;
 
@@ -75,6 +96,7 @@ export async function startRealOAuth(toolkitSlug: string): Promise<{ redirectUrl
 }
 
 export async function deleteRealConnection(connectionId: string): Promise<void> {
+  assertValidConnectionId(connectionId);
   const composio = getClient();
   await composio.connectedAccounts.delete(connectionId);
 }
@@ -94,6 +116,14 @@ export interface RealToolkitSummary {
 let toolkitCache: RealToolkitSummary[] | null = null;
 let toolkitCacheAt = 0;
 const TOOLKIT_CACHE_TTL_MS = 60 * 60 * 1000;
+const CATALOG_FETCH_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
 
 export async function listAllToolkits(forceRefresh = false): Promise<RealToolkitSummary[]> {
   const composio = getClient();
@@ -103,7 +133,7 @@ export async function listAllToolkits(forceRefresh = false): Promise<RealToolkit
   // getToolkits() works at runtime (verified live -- real catalog of
   // ~1000 toolkits returned) but the SDK's .d.ts marks it @private, so
   // TS blocks the call through the typed surface. Casting to any here.
-  const raw = await (composio.toolkits as any).getToolkits({});
+  const raw: any[] = await withTimeout((composio.toolkits as any).getToolkits({}), CATALOG_FETCH_TIMEOUT_MS, 'Composio catalog fetch');
   toolkitCache = raw.map((t: any) => ({
     slug: t.slug,
     name: t.name,

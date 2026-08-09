@@ -15,6 +15,21 @@ import { Type } from '@google/genai';
 
 const VANTAGE_MCP_URL = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
 const VANTAGE_AGENT_KEY = process.env.VANTAGE_AGENT_KEY || '';
+// A voice turn shouldn't hang on the MCP SDK's 60s default -- fail fast
+// enough that the caller can speak a real error instead of the user
+// sitting in silence.
+const CALL_TIMEOUT_MS = 20_000;
+// Defense against a malformed/runaway argument payload (e.g. the model
+// looping garbage into a tool call) -- reject before it ever reaches
+// Vantage rather than sending an oversized request.
+const MAX_ARGS_BYTES = 50_000;
+// Real concurrency cap: this module holds one MCP connection for the
+// whole process; without a cap, multi-agent orchestration or several
+// rapid tool calls could pile up requests faster than Vantage answers
+// them. Simple in-flight counter, not a queue -- excess calls fail fast
+// with a real "busy" error rather than silently stacking up.
+const MAX_CONCURRENT_CALLS = 5;
+let inFlightCalls = 0;
 
 export interface VantageMcpTool {
   name: string;
@@ -72,7 +87,7 @@ async function connect(): Promise<Client> {
 export async function initVantageMcp(): Promise<VantageMcpTool[]> {
   try {
     const c = await connect();
-    const result = await c.listTools();
+    const result = await c.listTools(undefined, { timeout: CALL_TIMEOUT_MS });
     discoveredTools = result.tools.map((t) => ({
       name: t.name,
       description: t.description || '',
@@ -167,24 +182,45 @@ export async function callVantageTool(geminiFunctionName: string, args: Record<s
   if (!realName) {
     throw new Error(`Unknown Vantage MCP tool: ${geminiFunctionName}`);
   }
+  if (!args || typeof args !== 'object' || Array.isArray(args)) {
+    throw new Error('Tool arguments must be a plain object');
+  }
+  const argsSize = JSON.stringify(args).length;
+  if (argsSize > MAX_ARGS_BYTES) {
+    throw new Error(`Tool arguments too large (${argsSize} bytes, max ${MAX_ARGS_BYTES})`);
+  }
+
+  if (inFlightCalls >= MAX_CONCURRENT_CALLS) {
+    throw new Error(`Vantage MCP is busy (${inFlightCalls} calls already in flight) -- try again in a moment`);
+  }
 
   const attempt = async () => {
     const c = await connect();
-    return c.callTool({ name: realName, arguments: args });
+    return c.callTool({ name: realName, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS });
   };
 
+  inFlightCalls++;
   let result;
   try {
-    result = await attempt();
-  } catch (err: any) {
-    const msg = err?.message || String(err);
-    if (/session/i.test(msg)) {
-      console.warn('[VantageMCP] stale session detected, reconnecting and retrying once:', msg);
-      client = null;
+    try {
       result = await attempt();
-    } else {
-      throw err;
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      // Retry once for a stale session (server restarted -- see prior
+      // fix) or a transient network blip. Anything else (a real tool
+      // error, a real 4xx) is not worth retrying and surfaces immediately.
+      const isRetryable = /session|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up/i.test(msg);
+      if (isRetryable) {
+        console.warn(`[VantageMCP] retryable error, reconnecting and retrying once ('${realName}'):`, msg);
+        client = null;
+        await new Promise((r) => setTimeout(r, 300));
+        result = await attempt();
+      } else {
+        throw err;
+      }
     }
+  } finally {
+    inFlightCalls--;
   }
 
   if (result.isError) {

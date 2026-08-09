@@ -23,6 +23,15 @@ let connecting: Promise<Client> | null = null;
 let discoveredTools: ComposioMcpTool[] = [];
 const nameMap = new Map<string, string>(); // gemini name -> real composio tool name
 
+// Same hardening rationale as vantageMcp.ts: a voice turn shouldn't hang
+// on a slow/dead remote MCP server, a runaway argument payload shouldn't
+// reach Composio, and calls shouldn't pile up unbounded if several fire
+// in quick succession (e.g. from multi-agent orchestration).
+const CALL_TIMEOUT_MS = 20_000;
+const MAX_ARGS_BYTES = 50_000;
+const MAX_CONCURRENT_CALLS = 5;
+let inFlightCalls = 0;
+
 export function toGeminiFunctionName(composioToolName: string): string {
   return `composio__${composioToolName}`.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 64);
 }
@@ -68,7 +77,7 @@ export async function initComposioMcp(): Promise<ComposioMcpTool[]> {
   }
   try {
     const c = await connect();
-    const result = await c.listTools();
+    const result = await c.listTools(undefined, { timeout: CALL_TIMEOUT_MS });
     discoveredTools = result.tools.map((t) => ({
       name: t.name,
       description: t.description || '',
@@ -156,8 +165,43 @@ export async function callComposioTool(geminiFunctionName: string, args: Record<
   if (!realName) {
     throw new Error(`Unknown Composio tool: ${geminiFunctionName}`);
   }
-  const c = await connect();
-  const result = await c.callTool({ name: realName, arguments: args });
+  if (!args || typeof args !== 'object' || Array.isArray(args)) {
+    throw new Error('Tool arguments must be a plain object');
+  }
+  const argsSize = JSON.stringify(args).length;
+  if (argsSize > MAX_ARGS_BYTES) {
+    throw new Error(`Tool arguments too large (${argsSize} bytes, max ${MAX_ARGS_BYTES})`);
+  }
+  if (inFlightCalls >= MAX_CONCURRENT_CALLS) {
+    throw new Error(`Composio MCP is busy (${inFlightCalls} calls already in flight) -- try again in a moment`);
+  }
+
+  const attempt = async () => {
+    const c = await connect();
+    return c.callTool({ name: realName, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS });
+  };
+
+  inFlightCalls++;
+  let result;
+  try {
+    try {
+      result = await attempt();
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      const isRetryable = /session|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up/i.test(msg);
+      if (isRetryable) {
+        console.warn(`[ComposioMCP] retryable error, reconnecting and retrying once ('${realName}'):`, msg);
+        client = null;
+        await new Promise((r) => setTimeout(r, 300));
+        result = await attempt();
+      } else {
+        throw err;
+      }
+    }
+  } finally {
+    inFlightCalls--;
+  }
+
   if (result.isError) {
     const errText = Array.isArray(result.content)
       ? result.content.map((c: any) => c.text || '').join('\n')
