@@ -117,6 +117,72 @@ async function generateTextDirect(systemPrompt: string, userPrompt: string): Pro
   return text.trim();
 }
 
+const ORCHESTRATOR_TOOL_LOOP_MAX_ITERATIONS = 6;
+
+/**
+ * Real tool-calling version of generateTextDirect -- used specifically for
+ * native's own turns in a multi-agent exchange. Without this, native's
+ * orchestrator-routed replies were pure free-generated text with zero real
+ * tool access (no trading, wallet, buzz, memory vault, Composio
+ * connectors, etc.), even though the exact same "native" agent has full
+ * live tool access outside multi-agent mode -- a real capability
+ * regression the moment a 2nd roster member joined. This runs the same
+ * declared tool catalog (local + Vantage MCP + Composio) through a real
+ * generateContent function-calling loop: execute each real functionCall via
+ * executeToolCall, feed the real result back, repeat until Gemini returns
+ * a final answer or the iteration cap is hit.
+ */
+async function generateTextWithTools(systemPrompt: string, userPrompt: string, ctx: ToolCtx): Promise<string> {
+  const { client, hasKey } = getAiClient();
+  if (!hasKey) throw new Error('No Gemini API key available for tool-enabled text generation');
+
+  const tools = [
+    {
+      functionDeclarations: [
+        ...liveTools[0].functionDeclarations,
+        ...buildGeminiDeclarationsForVantageTools(),
+        ...buildGeminiDeclarationsForComposioTools(),
+      ],
+    },
+  ];
+
+  const contents: any[] = [{ role: 'user', parts: [{ text: userPrompt }] }];
+
+  for (let iteration = 0; iteration < ORCHESTRATOR_TOOL_LOOP_MAX_ITERATIONS; iteration++) {
+    const response = await client.models.generateContent({
+      model: 'gemini-3.1-flash-lite-preview',
+      contents,
+      config: { systemInstruction: systemPrompt, tools },
+    });
+
+    const parts = response.candidates?.[0]?.content?.parts || [];
+    const functionCalls = parts.filter((p: any) => p.functionCall).map((p: any) => p.functionCall);
+
+    if (functionCalls.length === 0) {
+      const text = parts.map((p: any) => p.text || '').join('').trim();
+      if (!text) throw new Error('Gemini returned empty text');
+      return text;
+    }
+
+    contents.push({ role: 'model', parts });
+
+    const responseParts: any[] = [];
+    for (const call of functionCalls) {
+      console.log(`[Orchestrator Tool Call] native turn requested tool: ${call.name}`);
+      let result: any;
+      try {
+        result = await executeToolCall(call.name, call.args || {}, ctx);
+      } catch (err: any) {
+        result = { status: 'error', message: err?.message || String(err) };
+      }
+      responseParts.push({ functionResponse: { name: call.name, response: result } });
+    }
+    contents.push({ role: 'user', parts: responseParts });
+  }
+
+  throw new Error('Tool-call loop exceeded max iterations without a final answer');
+}
+
 // Process level error safety
 process.on('uncaughtException', (err: any) => {
   console.warn('[Process] Uncaught exception (handled):', err?.message || err);
@@ -354,17 +420,17 @@ const mcpServerClientDeclaration: FunctionDeclaration = {
 
 const toolSearchRetrievalDeclaration: FunctionDeclaration = {
   name: 'tool_search_retrieval',
-  description: 'Dynamic tool search & semantic retrieval engine. Searches 50+ available tools by intent or capability keywords to return matching parameter schemas without overloading agent context.',
+  description: 'Dynamic tool search & semantic retrieval engine over every real tool this agent can call -- Vantage\'s live platform (trading, wallets, buzz/social, genesis/birth, memory vault, glyphindex, guilds, forum, video/podcast/playlists, degen, copytrade, alpha, collectives, mesh, federation, analytics, and more), Composio OAuth connectors, and local owner/swarm controls. Searches by intent or capability keywords to return matching parameter schemas without overloading agent context.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       query: {
         type: Type.STRING,
-        description: 'Search query describing requested capability or task (e.g. "search github code", "control smart thermostat", "send email")',
+        description: 'Search query describing requested capability or task (e.g. "post to buzz", "birth a new agent", "check wallet balance", "join a guild", "generate a video")',
       },
       category: {
         type: Type.STRING,
-        description: 'Optional category filter: "all", "search", "coding", "computer_control", "communication", "dev_software", "domain", "mcp"',
+        description: 'Optional category filter: "all", "local" (owner/swarm/memory/composio-control tools), or "vantage" (live Vantage platform tools)',
       },
       topK: {
         type: Type.NUMBER,
@@ -816,22 +882,20 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
     const categoryFilter = args.category || 'all';
     const topK = args.topK || 5;
 
-    // Local demo/generic tools (implemented above in this file, real
-    // handlers, just not Vantage-specific).
-    const LOCAL_TOOLS = [
-      { name: 'web_search', category: 'search', desc: 'Perform live Google web search with deep ranking & content snippets' },
-      { name: 'browse_web_page', category: 'search', desc: 'Read and extract cleaned text and HTML structure from web URLs' },
-      { name: 'execute_terminal_command', category: 'coding', desc: 'Execute bash terminal commands in sandboxed environment' },
-      { name: 'github_dev_tools', category: 'dev_software', desc: 'Search GitHub repositories, view code blobs, check pull requests' },
-      { name: 'database_query', category: 'dev_software', desc: 'Run SQL SELECT/INSERT/UPDATE queries or Vector similarity search' },
-      { name: 'make_http_api_call', category: 'dev_software', desc: 'Execute generic HTTP REST API requests (GET, POST, PUT, DELETE)' },
-      { name: 'automate_browser', category: 'computer_control', desc: 'Simulate automated browser actions (navigate, click, type, screenshot)' },
-      { name: 'manage_email', category: 'communication', desc: 'Search, read, draft, or send Gmail emails with attachments' },
-      { name: 'send_chat_message', category: 'communication', desc: 'Send Slack, Discord, or Microsoft Teams channel messages' },
-      { name: 'domain_data_services', category: 'domain', desc: 'Weather forecasts, stock prices, geocoding routes, and text translation' },
-      { name: 'mcp_server_client', category: 'mcp', desc: 'Real MCP client -- list_tools/call_tool against Vantage\'s live MCP server' },
-      { name: 'multi_agent_tool_delegation', category: 'mcp', desc: 'Spawn and delegate complex sub-tasks to specialized AI sub-agents' },
-    ];
+    // Local tools, derived live from the actual declared functionDeclarations
+    // (liveTools above) rather than a hand-maintained list -- this used to be
+    // a separate hardcoded array that still listed 9 fabricated tools
+    // (web_search, manage_email, github_dev_tools, database_query,
+    // make_http_api_call, automate_browser, send_chat_message,
+    // domain_data_services, plus a wrong name for delegate_to_agent) for
+    // months after their real handlers were removed, so search would "find"
+    // and try to call tools that no longer existed. Deriving from the real
+    // declarations makes that class of drift structurally impossible.
+    const LOCAL_TOOLS = liveTools[0].functionDeclarations.map((d) => ({
+      name: d.name as string,
+      category: 'local',
+      desc: (d.description as string) || d.name || '',
+    }));
 
     // Real Vantage tools, discovered live at server startup from Vantage's
     // own MCP server -- not a hardcoded list. This is the actual point of
@@ -1914,6 +1978,14 @@ wss.on('connection', (clientWs: WebSocket) => {
   let multiAgentEnabled = false;
   let roster: RosterMember[] = [];
   let voiceNameForOrchestrator = 'Zephyr';
+  // Real cross-turn memory for the orchestrator's planner -- previously
+  // always passed '' for recentHistory, so planTurns() picked who responds
+  // with zero awareness of anything said in earlier exchanges (agents could
+  // "hear" each other only within a single planned turn via exchangeSoFar,
+  // never across separate user utterances). Capped so it doesn't grow
+  // unbounded over a long session.
+  const multiAgentExchangeLog: string[] = [];
+  const MULTI_AGENT_HISTORY_MAX_LINES = 24;
 
   clientWs.on('error', (err: any) => {
     console.warn('[WebSocket] Client socket error (handled):', err?.message || err);
@@ -1960,7 +2032,7 @@ wss.on('connection', (clientWs: WebSocket) => {
       // below.
       const vantageToolCount = getDiscoveredTools().length;
       if (vantageToolCount > 0) {
-        systemInstruction = `You are Vantage-Voice, a real agent on the Vantage platform (agent id 317) with live access to ${vantageToolCount} real Vantage tools -- trading, wallet, buzz/social, and job/task capabilities, not simulated. When a request needs real data or a real action (prices, balances, posting, trading, checking your own identity, etc.), use tool_search_retrieval to find the right Vantage tool by name, then mcp_server_client with action "call_tool" to actually call it -- don't guess or make up an answer when a real tool can answer it. Speak the real result naturally, don't read out raw JSON.\n\n${systemInstruction}`;
+        systemInstruction = `You are Vantage-Voice, a real agent on the Vantage platform (agent id 317) with live access to ${vantageToolCount} real Vantage tools spanning the WHOLE platform, not just trading -- trading & wallets, buzz/social posting & DMs, genesis (birthing/spawning new agents, agent lineage), memory vault, glyphindex, guilds/forum/collectives, video/audio/podcast/playlist studio, degen/copytrade/alpha-hunter/pumpfun, mesh & federation, analytics, jobs/tasks, human accounts & agent grants, and more -- not simulated. Never assume a capability is unavailable just because it doesn't sound like trading or social -- if the user asks for ANY real platform action (birth an agent, check a guild, generate a video, look up glyphindex, manage wallets, etc.), use tool_search_retrieval first to find the real tool by name/keyword, then mcp_server_client with action "call_tool" to actually call it -- don't guess, don't say something isn't possible without searching first. Speak the real result naturally, don't read out raw JSON.\n\n${systemInstruction}`;
       }
 
       // Real Composio connector tools -- whatever the owner has actually
@@ -1971,7 +2043,7 @@ wss.on('connection', (clientWs: WebSocket) => {
       // at the pattern.
       const composioToolCount = getDiscoveredComposioTools().length;
       if (composioToolCount > 0) {
-        systemInstruction = `${systemInstruction}\n\nYou also have real connector tools (COMPOSIO_SEARCH_TOOLS, COMPOSIO_MULTI_EXECUTE_TOOL, etc.) for whatever the user has actually connected in OAuth Integrations (Gmail, GitHub, Outlook, Discord, Slack, GitLab, Notion, Dropbox). Use COMPOSIO_SEARCH_TOOLS to find the right action, then execute it for real -- if a toolkit isn't connected yet, the tool will say so honestly; tell the user to connect it in Settings rather than pretending you did it.`;
+        systemInstruction = `${systemInstruction}\n\nYou also have real connector tools (COMPOSIO_SEARCH_TOOLS, COMPOSIO_MULTI_EXECUTE_TOOL, etc.) covering Composio's full ~1000-toolkit catalog (Gmail, GitHub, Outlook, Discord, Slack, GitLab, Notion, Dropbox, Salesforce, Trello, and hundreds more), not just a hand-picked few. Use search_composio_toolkits to find the right toolkit by name/keyword, then COMPOSIO_SEARCH_TOOLS/COMPOSIO_MULTI_EXECUTE_TOOL for the actual action -- if a toolkit isn't connected yet, say so honestly and offer to start the real OAuth connection (owner PIN required) rather than pretending you did it.`;
       }
 
       // Owner-control tools (API keys, app settings, secure memory) are
@@ -1989,7 +2061,15 @@ wss.on('connection', (clientWs: WebSocket) => {
       multiAgentEnabled = Boolean(config.multiAgentEnabled) && Array.isArray(config.roster) && config.roster.length > 1;
       roster = multiAgentEnabled ? config.roster : [];
       if (multiAgentEnabled) {
-        systemInstruction = `[MULTI-AGENT SESSION] This conversation includes multiple participants: ${roster.map((m) => m.displayName).join(', ')}. An orchestrator routes each of your turns and speaks the other participants' real replies in their own voices -- you may hear turns attributed to them in the transcript. Speak only your own turn when it's yours.`;
+        // This live session no longer speaks for itself in multi-agent
+        // mode (see onmessage below) -- it's real-time ears only. A
+        // dedicated orchestrator (planTurns/executeTurns) decides who
+        // among ${roster.length} participants responds each turn,
+        // including native, and produces every spoken reply itself. This
+        // instruction/tools set still matters for real-time tool_call
+        // events the live model may emit mid-listening, but its own
+        // free-form text/audio replies are discarded, not spoken.
+        systemInstruction = `[MULTI-AGENT SESSION -- LISTENING MODE] You are one of several participants (${roster.map((m) => m.displayName).join(', ')}) in a real multi-agent voice conversation. A separate dedicated orchestrator decides who responds each turn and speaks every reply (including yours, when it's your turn) through its own channel -- do not generate a spoken reply yourself right now, your real turn will come through the orchestrator.`;
       }
 
       if (framework === 'hermes') {
@@ -2007,10 +2087,27 @@ wss.on('connection', (clientWs: WebSocket) => {
       console.log(`[Gemini Live] Connecting to ${targetModel} with voice ${voiceName} (Framework: ${framework})...`);
 
       const sessionConfig: any = {
+        // Always AUDIO -- gemini-3.1-flash-live-preview real-live-tested
+        // and rejects TEXT-only (Code 1007 "response modalities (TEXT) is
+        // not supported by the model"), confirmed live. Multi-agent mode
+        // still gets a real audio stream from Gemini here; it's just never
+        // forwarded to the client (see onmessage below) since the
+        // orchestrator produces the real spoken replies instead. Wastes a
+        // bit of synthesis we throw away, but TEXT-only isn't an option
+        // this model actually accepts.
         responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: { prebuiltVoiceConfig: { voiceName } },
         },
+        // Real bug found via an actual live test run: without this, Gemini
+        // never emits serverContent.inputAudioTranscription events at all,
+        // so pendingUserUtterance (built ONLY from those events) stayed ''
+        // forever -- turnComplete fired correctly, but the multi-agent
+        // orchestrator's `if (multiAgentEnabled && utterance && ...)` guard
+        // silently failed every single turn since utterance was always
+        // empty. This is why it looked stuck on "processing conversation
+        // turn": the orchestrator was never actually being invoked.
+        inputAudioTranscription: {},
         systemInstruction,
       };
 
@@ -2039,9 +2136,25 @@ wss.on('connection', (clientWs: WebSocket) => {
         callbacks: {
           onmessage: async (message: any) => {
             try {
-              // 1. Audio output chunk & direct text
+              // 1. Audio output chunk & direct text -- SUPPRESSED in
+              // multi-agent mode. The Gemini Live session always
+              // auto-generates and speaks its own reply on every turn --
+              // that's baseline Live API behavior, not something a system
+              // instruction can turn off. That's what was actually causing
+              // "only native responds"/"no proper orchestration": native
+              // wasn't just one roster member the planner could choose --
+              // it spoke unconditionally, on top of whatever the real
+              // dedicated orchestrator (planTurns/executeTurns below)
+              // decided, so it monopolized by construction. In multi-agent
+              // mode this live session is now used ONLY for its ears (real-
+              // time mic transcription feeding the orchestrator) -- every
+              // spoken reply, including native's own, is produced by the
+              // orchestrator's executeTurns via the same generateTextDirect
+              // + speak() path every other roster member uses, so native is
+              // a genuine equal participant the planner routes to, not a
+              // side channel that always wins.
               const modelParts = message.serverContent?.modelTurn?.parts;
-              if (modelParts) {
+              if (modelParts && !multiAgentEnabled) {
                 for (const part of modelParts) {
                   if (part.inlineData?.data) {
                     sendToClient(clientWs, {
@@ -2060,9 +2173,17 @@ wss.on('connection', (clientWs: WebSocket) => {
                 }
               }
 
-              // 2. Output transcriptions (AI speaking text)
-              const outputTranscription = message.serverContent?.outputAudioTranscription?.text;
-              if (outputTranscription) {
+              // 2. Output transcriptions (AI speaking text) -- same
+              // suppression as (1), and moot anyway once responseModalities
+              // is TEXT-only for multi-agent sessions (see sessionConfig
+              // below), since there's no audio track to transcribe.
+              // Real bug found via a live test run: the SDK's request-side
+              // config field is `outputAudioTranscription`, but the actual
+              // event that comes back is `serverContent.outputTranscription`
+              // (no "Audio") -- confirmed against raw wire messages. Was
+              // reading the wrong field name, so this never fired.
+              const outputTranscription = message.serverContent?.outputTranscription?.text;
+              if (outputTranscription && !multiAgentEnabled) {
                 sendToClient(clientWs, {
                   type: 'transcript',
                   sender: 'model',
@@ -2072,7 +2193,17 @@ wss.on('connection', (clientWs: WebSocket) => {
               }
 
               // 3. Input transcriptions (User spoken text)
-              const inputTranscription = message.serverContent?.inputAudioTranscription?.text;
+              // Same real bug, input side: the actual event is
+              // `serverContent.inputTranscription`, not
+              // `inputAudioTranscription` -- this is THE root cause of the
+              // "stuck processing conversation turn" report. pendingUserUtterance
+              // was built exclusively from this field, so it silently stayed
+              // '' forever, and the orchestrator's `if (multiAgentEnabled &&
+              // utterance && ...)` guard never passed -- confirmed live: raw
+              // wire messages showed a real, correct
+              // {"inputTranscription":{"text":"..."}} event arriving that the
+              // old field name simply never matched.
+              const inputTranscription = message.serverContent?.inputTranscription?.text;
               if (inputTranscription) {
                 pendingUserUtterance += inputTranscription;
                 sendToClient(clientWs, {
@@ -2102,6 +2233,21 @@ wss.on('connection', (clientWs: WebSocket) => {
                 if (multiAgentEnabled && utterance && liveSession) {
                   const orchestratorDeps: OrchestratorDeps = {
                     generateText: generateTextDirect,
+                    generateNativeReply: (systemPrompt, userPrompt) =>
+                      generateTextWithTools(systemPrompt, userPrompt, {
+                        ownerUnlocked,
+                        unlockOwner: () => { ownerUnlocked = true; },
+                        applySettingOnClient: (setting, value) => {
+                          sendToClient(clientWs, { type: 'apply_setting', toolName: setting, text: value });
+                        },
+                        applyRosterChange: (action, backend, voice) => {
+                          sendToClient(clientWs, {
+                            type: 'apply_roster_change',
+                            toolName: action,
+                            text: JSON.stringify({ backend, voice }),
+                          });
+                        },
+                      }),
                     callBridge: async (backend, text) => {
                       const key = backend === 'hermes' ? activeHermesKey
                         : backend === 'hermes_contabo' ? activeHermesContaboKey
@@ -2121,12 +2267,18 @@ wss.on('connection', (clientWs: WebSocket) => {
                         text,
                         isFinal: true,
                       });
+                      multiAgentExchangeLog.push(`${displayName}: ${text}`);
+                      if (multiAgentExchangeLog.length > MULTI_AGENT_HISTORY_MAX_LINES) {
+                        multiAgentExchangeLog.splice(0, multiAgentExchangeLog.length - MULTI_AGENT_HISTORY_MAX_LINES);
+                      }
                     },
                   };
 
                   (async () => {
                     try {
-                      const plan = await planTurns(generateTextDirect, utterance, roster, '');
+                      multiAgentExchangeLog.push(`User: ${utterance}`);
+                      const recentHistory = multiAgentExchangeLog.join('\n');
+                      const plan = await planTurns(generateTextDirect, utterance, roster, recentHistory);
                       await executeTurns(orchestratorDeps, utterance, roster, plan);
                     } catch (err: any) {
                       console.warn('[Orchestrator] exchange failed:', err?.message || err);

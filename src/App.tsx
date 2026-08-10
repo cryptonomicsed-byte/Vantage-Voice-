@@ -10,6 +10,7 @@ import {
   MemoryTier,
   VoiceCommandLogItem,
   VoiceName,
+  RosterMember,
 } from './types';
 import { DEFAULT_SETTINGS, SYSTEM_PERSONAS } from './lib/constants';
 import { AudioPlayer } from './lib/audioPlayer';
@@ -771,16 +772,57 @@ export default function App() {
           try {
             const { backend, voice } = JSON.parse(msg.text || '{}');
             setSettings((prev) => {
+              let nextRoster: RosterMember[];
               if (action === 'remove') {
-                return { ...prev, roster: prev.roster.filter((m) => m.backend !== backend) };
+                nextRoster = prev.roster.filter((m) => m.backend !== backend);
+              } else if (prev.roster.some((m) => m.backend === backend)) {
+                nextRoster = prev.roster; // already present
+              } else {
+                const displayName = backend === 'native' ? 'Vantage' : backend === 'hermes' ? 'Hermes (Hostinger)' : backend === 'hermes_contabo' ? 'Hermes (Contabo)' : 'OpenClaw';
+                const defaultVoice = backend === 'hermes' ? 'Puck' : backend === 'hermes_contabo' ? 'Aoede' : backend === 'open_claw' ? 'Charon' : 'Zephyr';
+                nextRoster = [...prev.roster, { id: backend, displayName, backend, voice: (voice || defaultVoice) as VoiceName }];
               }
-              if (prev.roster.some((m) => m.backend === backend)) return prev; // already present
-              const displayName = backend === 'native' ? 'Vantage' : backend === 'hermes' ? 'Hermes (Hostinger)' : backend === 'hermes_contabo' ? 'Hermes (Contabo)' : 'OpenClaw';
-              const defaultVoice = backend === 'hermes' ? 'Puck' : backend === 'hermes_contabo' ? 'Aoede' : backend === 'open_claw' ? 'Charon' : 'Zephyr';
-              return {
-                ...prev,
-                roster: [...prev.roster, { id: backend, displayName, backend, voice: (voice || defaultVoice) as VoiceName }],
-              };
+              // Adding a 2nd+ roster member is exactly the signal that the
+              // user wants real multi-agent turn-taking -- without this,
+              // add_roster_member updated client state but never actually
+              // turned multi-agent mode on, so the server kept routing
+              // every turn through the single-agent path regardless of who
+              // was "in" the roster.
+              const nextMultiAgentEnabled = nextRoster.length > 1 ? true : prev.multiAgentEnabled;
+
+              // The active Gemini Live session only reads roster/
+              // multiAgentEnabled from the WS 'config' message it got at
+              // connect time -- found live: voice-driven roster changes
+              // updated this client's settings but were never resent, so
+              // the already-running session never learned about the new
+              // roster and kept answering as a single agent. Resend a live
+              // config update, same pattern used for auto-detected-language
+              // updates above.
+              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                const persona = SYSTEM_PERSONAS.find((p) => p.id === prev.personaId) || SYSTEM_PERSONAS[0];
+                const systemInstruction = prev.customInstruction || persona.systemInstruction;
+                wsRef.current.send(
+                  JSON.stringify({
+                    type: 'config',
+                    config: {
+                      systemInstruction,
+                      voice: prev.voice,
+                      playbackSpeed: prev.playbackSpeed,
+                      translationMode: prev.translationMode,
+                      targetLanguageCode: prev.targetLanguageCode,
+                      enableTools: prev.enableTools,
+                      agentFramework: prev.agentFramework,
+                      hermesAgentKey: prev.hermesAgentKey,
+                      hermesContaboAgentKey: prev.hermesContaboAgentKey,
+                      openClawAgentKey: prev.openClawAgentKey,
+                      multiAgentEnabled: nextMultiAgentEnabled,
+                      roster: nextRoster,
+                    },
+                  })
+                );
+              }
+
+              return { ...prev, roster: nextRoster, multiAgentEnabled: nextMultiAgentEnabled };
             });
             triggerToast('🎭 Roster Updated', `Agent ${action === 'remove' ? 'removed' : 'added'} "${backend}"`);
           } catch (e) {

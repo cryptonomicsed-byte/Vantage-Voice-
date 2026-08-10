@@ -25,6 +25,12 @@ export class AudioRecorder {
   private enableDSPFilters: boolean = true;
   private enableVoiceIsolationGate: boolean = true;
   private estimatedNoiseFloor: number = 0.005;
+  private consecutiveVoiceFrames: number = 0;
+  // ~4096-sample buffers -- at 16-48kHz native rates this is roughly
+  // 90-260ms per frame, so 3 frames is ~270-780ms of sustained voice
+  // before speech-start (and therefore barge-in) fires. Short transients
+  // (coughs, clicks, a door) don't survive that; real speech does.
+  private voiceStartDebounceFrames: number = 3;
   private callbacks: AudioRecorderCallbacks;
 
   constructor(callbacks: AudioRecorderCallbacks) {
@@ -114,22 +120,41 @@ export class AudioRecorder {
           this.callbacks.onVADVolumeChange(rms, peak);
         }
 
-        // Dynamically update estimated background noise floor during non-speech periods
+        // Dynamically update estimated background noise floor during non-speech periods.
+        // This was computed but never actually applied anywhere -- found live during
+        // a real audit: a single loud transient (a click, a cough, a door) crossing the
+        // fixed vadThreshold instantly fired onSpeechStart with zero debounce, and
+        // when the AI was mid-reply that immediately triggered a real barge-in
+        // interrupt. Two real fixes below: the noise floor now actually raises the
+        // effective threshold in noisy environments, and speech-start requires a
+        // few consecutive above-threshold frames (not one) before it's trusted.
         if (rms < this.vadThreshold) {
           this.estimatedNoiseFloor = this.estimatedNoiseFloor * 0.95 + rms * 0.05;
         }
+        const effectiveThreshold = Math.max(this.vadThreshold, this.estimatedNoiseFloor * 2.5);
 
         // Voice Isolation Noise Gate Logic:
         // If voice isolation gate is enabled and volume is below speech threshold,
         // zero out or suppress ambient noise samples so background chatter/fan is ignored.
-        const isVoiceDetected = rms > this.vadThreshold;
+        const aboveThreshold = rms > effectiveThreshold;
 
-        if (this.enableVoiceIsolationGate && !isVoiceDetected) {
+        if (this.enableVoiceIsolationGate && !aboveThreshold) {
           // Attenuate ambient background noise by 95%
           for (let i = 0; i < inputChannelData.length; i++) {
             inputChannelData[i] *= 0.05;
           }
         }
+
+        // Debounce: require sustained voice energy across consecutive frames
+        // (~4096 samples each) before declaring real speech, not a single
+        // ~90-260ms transient. Silence resets the streak immediately so real
+        // speech onset still feels responsive once it actually starts.
+        if (aboveThreshold) {
+          this.consecutiveVoiceFrames++;
+        } else {
+          this.consecutiveVoiceFrames = 0;
+        }
+        const isVoiceDetected = this.consecutiveVoiceFrames >= this.voiceStartDebounceFrames;
 
         // VAD State Machine
         if (isVoiceDetected) {
@@ -143,7 +168,7 @@ export class AudioRecorder {
             clearTimeout(this.silenceTimer);
             this.silenceTimer = null;
           }
-        } else if (this.isSpeaking) {
+        } else if (this.isSpeaking && !aboveThreshold) {
           if (!this.silenceTimer) {
             this.silenceTimer = setTimeout(() => {
               this.isSpeaking = false;

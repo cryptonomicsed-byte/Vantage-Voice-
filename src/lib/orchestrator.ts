@@ -23,8 +23,10 @@ export interface PlannedTurn {
 }
 
 export interface OrchestratorDeps {
-  /** Real, non-live Gemini call used for both planning and native-member turns. */
+  /** Real, non-live, tool-LESS Gemini call -- used only for the planner's own routing decision, where a fast, deterministic JSON reply matters more than tool access. */
   generateText: (systemPrompt: string, userPrompt: string) => Promise<string>;
+  /** Real, non-live, tool-ENABLED Gemini call (generateTextWithTools in server.ts) -- used for native's actual conversational turns, so native keeps its real Vantage/Composio tool access inside a multi-agent exchange instead of losing it the moment a 2nd roster member joins. */
+  generateNativeReply: (systemPrompt: string, userPrompt: string) => Promise<string>;
   /** Real Hermes/OpenClaw bridge call (callVantageAgentBridge in server.ts). */
   callBridge: (backend: 'hermes' | 'hermes_contabo' | 'open_claw', text: string) => Promise<string>;
   /** Real direct TTS + WS audio send for one spoken turn. */
@@ -50,14 +52,26 @@ export async function planTurns(
     .map((m) => `- id="${m.id}" name="${m.displayName}" backend=${m.backend}`)
     .join('\n');
 
-  const systemPrompt = `You are the turn-taking orchestrator for a multi-agent voice conversation.
-Given the user's latest message, the roster of participants, and recent conversation history,
-decide which participant(s) should respond and in what order, and what each is actually being
-asked to do. Prefer a single responder for ordinary questions. Use multiple turns only when the
-task genuinely splits across participants (e.g. one drafts, another reviews) or the user
-explicitly asks more than one participant something. Respond with ONLY a JSON object of the form
-{"turns":[{"memberId":"...", "task":"..."}]} using memberId values exactly as given. If nothing
-needs a spoken response, return {"turns":[]}.`;
+  const systemPrompt = `You are the turn-taking orchestrator for a real multi-agent voice
+roundtable. Given the user's latest message, the roster of participants, and recent conversation
+history (including what each participant has already said), decide which participant(s) respond
+and in what order, and what each is actually being asked to do.
+
+Default to a roundtable: when the user asks an open question, makes a general statement, or asks
+the group something, include EVERY roster member in the plan (in a sensible speaking order) so
+they each get to weigh in -- that's the whole point of having them all in the conversation. Use
+their real prior turns (in recent history) to avoid restating each other; each should add their
+own angle, agree/disagree, or build on what was already said, not just repeat it.
+
+Narrow to fewer responders only when it's clearly warranted: the user addresses one participant by
+name specifically ("Hermes, ..."), the message is a private/administrative aside (owner PIN, a
+settings change) that isn't actually a conversational question, or a participant has nothing
+relevant to add because the topic is squarely outside anything they'd know. When in doubt, include
+more participants rather than fewer -- silence from someone in the roster should be the exception.
+
+Respond with ONLY a JSON object of the form {"turns":[{"memberId":"...", "task":"..."}]} using
+memberId values exactly as given. If truly nothing needs a spoken response (e.g. pure silence/noise),
+return {"turns":[]}.`;
 
   const userPrompt = `Roster:\n${rosterDesc}\n\nRecent history:\n${recentHistory || '(none yet)'}\n\nUser's latest message: "${utterance}"`;
 
@@ -105,8 +119,8 @@ export async function executeTurns(
     let reply: string;
     try {
       if (member.backend === 'native') {
-        reply = await deps.generateText(
-          'You are a helpful, concise voice assistant participating in a multi-agent conversation. Speak naturally.',
+        reply = await deps.generateNativeReply(
+          'You are Vantage-Voice, participating in a real multi-agent voice conversation. You have real tool access (Vantage platform tools, Composio connectors, owner controls) exactly like your normal single-agent self -- use tool_search_retrieval/mcp_server_client or the direct real-Vantage/Composio tools when the task actually needs real data or a real action, don\'t guess. Speak naturally and concisely for voice, no markdown.',
           prompt,
         );
       } else {

@@ -124,10 +124,23 @@ function convertProperties(schema: any): Record<string, any> {
   const props = schema?.properties || {};
   const out: Record<string, any> = {};
   for (const [key, val] of Object.entries<any>(props)) {
-    out[key] = {
-      type: mapSchemaType(val?.type),
+    const type = mapSchemaType(val?.type);
+    const converted: any = {
+      type,
       description: val?.description || val?.title || key,
     };
+    // Gemini's Live API rejects the WHOLE session setup if any ARRAY
+    // property lacks `items` -- this is what was actually killing every
+    // native-framework session (1007 "properties[tool_slugs].items:
+    // missing field", tool_slugs being a real Composio search param).
+    // Same fix as vantageMcp.ts's convertProperties -- default to STRING
+    // items when Composio's own schema omits them.
+    if (type === Type.ARRAY) {
+      converted.items = val?.items
+        ? { type: mapSchemaType(val.items.type), description: val.items.description || '' }
+        : { type: Type.STRING };
+    }
+    out[key] = converted;
   }
   return out;
 }

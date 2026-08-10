@@ -135,10 +135,26 @@ function convertProperties(schema: any): Record<string, any> {
   const props = schema?.properties || {};
   const out: Record<string, any> = {};
   for (const [key, val] of Object.entries<any>(props)) {
-    out[key] = {
-      type: mapSchemaType(val?.type),
+    const type = mapSchemaType(val?.type);
+    const converted: any = {
+      type,
       description: val?.description || val?.title || key,
     };
+    // Gemini's Live API rejects the ENTIRE session setup (all tools, not
+    // just this one) if any ARRAY property lacks `items` -- found live via
+    // real "processing conversation turn" hangs: the WS session was
+    // actually being killed at connect time with a 1007 schema error
+    // ("properties[tool_slugs].items: missing field") from a real Vantage
+    // tool's array param, so no turn -- not even the first one -- could
+    // ever complete. Real Vantage/fastapi-mcp array schemas sometimes omit
+    // `items` too (e.g. an untyped List[str]), so default to STRING items
+    // rather than dropping the property or crashing the declaration build.
+    if (type === Type.ARRAY) {
+      converted.items = val?.items
+        ? { type: mapSchemaType(val.items.type), description: val.items.description || '' }
+        : { type: Type.STRING };
+    }
+    out[key] = converted;
   }
   return out;
 }
