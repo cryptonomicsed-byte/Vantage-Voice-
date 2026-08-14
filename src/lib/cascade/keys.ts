@@ -25,6 +25,7 @@ const KEY_FILE_CANDIDATES = [
 export interface CascadeKeys {
   groqApiKey: string;
   elevenLabsApiKey: string;
+  elevenLabsVoiceId: string;
   deepseekApiKey: string;
 }
 
@@ -69,6 +70,7 @@ export function getCascadeKeys(): CascadeKeys {
     cached = {
       groqApiKey: process.env.GROQ_API_KEY || file.GROQ_API_KEY || '',
       elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || file.ELEVENLABS_API_KEY || '',
+      elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID || file.ELEVENLABS_VOICE_ID || '',
       deepseekApiKey: process.env.DEEPSEEK_API_KEY || file.DEEPSEEK_API_KEY || '',
     };
     lastMtimeMs = mtimeMs;
@@ -80,9 +82,8 @@ export function getCascadeKeys(): CascadeKeys {
 export const STT_BASE_URL = 'https://api.groq.com/openai/v1';
 export const STT_MODEL = 'whisper-large-v3-turbo';
 export const TTS_MODEL = 'eleven_flash_v2_5';
-/** s2s default voice; overridable via ELEVENLABS_VOICE_ID. */
-export const TTS_DEFAULT_VOICE =
-  process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
+/** Default ElevenLabs voice — Sarah (free tier premade, verified 200 on this account). Override via ELEVENLABS_VOICE_ID in the keys file. */
+export const TTS_DEFAULT_VOICE = 'EXAVITQu4vr4xnSDxMaL';
 
 /** True when the requested voice name is a raw ElevenLabs voice id (20+ chars, alnum). */
 export function isElevenLabsVoiceId(voice: string): boolean {

@@ -234,11 +234,16 @@ export class CascadeEngine {
         text: reply,
         isFinal: true,
       });
-      chunker.push(reply);
+      // Speak ALL sentences: push() drains complete sentences from the
+      // reply (e.g. "Hello!", "Cascade Voice Engine — that sounds
+      // interesting."), flush() emits whatever remains at the end.
+      const chunk = chunker.push(reply);
+      assistantText += chunk.spoken;
+      speak(chunk.sentences);
       const tail = chunker.flush();
+      assistantText += tail.spoken;
       speak(tail.sentences);
-      assistantText = tail.spoken;
-      if (tail.sentences.length > 0) this.speaking = true;
+      if (tail.sentences.length > 0 || chunk.sentences.length > 0) this.speaking = true;
       await speech.finish();
       if (this.speech === speech) this.speaking = false;
     } catch (error) {

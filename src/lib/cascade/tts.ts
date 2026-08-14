@@ -16,7 +16,6 @@ export interface Synthesizer {
   /** Streams 24 kHz mono PCM16 chunks for `text`. */
   stream(text: string, voice: string, signal: AbortSignal): AsyncIterable<Buffer>;
 }
-
 async function* readBody(response: Response): AsyncGenerator<Buffer> {
   const body = response.body;
   if (!body) return;
@@ -45,7 +44,7 @@ async function failure(response: Response, who: string): Promise<Error> {
 export class ElevenLabsSynthesizer implements Synthesizer {
   readonly name = 'elevenlabs';
   readonly model = TTS_MODEL;
-  readonly defaultVoice = TTS_DEFAULT_VOICE;
+  readonly defaultVoice = getCascadeKeys().elevenLabsVoiceId || TTS_DEFAULT_VOICE;
 
   constructor(private apiKey: string) {}
 
