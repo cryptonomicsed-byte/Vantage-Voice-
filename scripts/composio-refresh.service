@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Composio Tool Router MCP session for hermes-agent-contabo
+After=docker.service hermes-agent-contabo.service
+
+[Service]
+Type=oneshot
+# The refresh rewrites /opt/data/config.yaml (the Hermes config); restarting
+# the container picks up the fresh session URL+key at boot via the entrypoint
+# wrapper. We restart via docker compose only if the config actually changed
+# (the script prints COMPOSIO_REFRESH_OK only on success + rewrite).
+ExecStart=/opt/vantage-voice/scripts/composio-refresh-and-restart.sh

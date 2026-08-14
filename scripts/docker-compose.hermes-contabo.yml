@@ -1,0 +1,24 @@
+# Hermes-agent-contabo docker-compose — Composio MCP session refresh wiring.
+#
+# The composio MCP server in Hermes config.yaml mints ONE-TIME session URLs.
+# To keep the brain's composio tools alive, the container entrypoint runs
+# scripts/composio-refresh.mjs (from the Vantage-Voice repo, mounted read-only)
+# before hermes starts — every boot gets a fresh session. The systemd
+# timer composio-refresh.timer re-mints every 6h without waiting for a boot.
+services:
+  hermes-agent:
+    image: ghcr.io/hostinger/hvps-hermes-agent:latest
+    restart: unless-stopped
+    ports:
+      - "10.88.0.2:8852:8850"
+      - "127.0.0.1:8642:8642"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/opt/data
+      # Vantage-Voice repo mounted read-only so the pre-start refresh script
+      # (and its @composio/core dep) is available inside the container.
+      - /opt/vantage-voice:/opt/vantage-voice:ro
+    # Pre-start hook: refresh composio session, then exec the real hermes cmd.
+    entrypoint: ["/bin/bash", "/opt/vantage-voice/scripts/composio-refresh-entrypoint.sh"]
+    command: ["/opt/venv/bin/hermes", "gateway", "start"]

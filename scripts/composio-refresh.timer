@@ -1,0 +1,11 @@
+[Unit]
+Description=Run composio-refresh every 6 hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=6h
+AccuracySec=1min
+Unit=composio-refresh.service
+
+[Install]
+WantedBy=timers.target
