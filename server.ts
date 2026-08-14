@@ -38,6 +38,9 @@ import {
   toGeminiFunctionName as toIrantiGeminiFunctionName,
 } from './src/lib/irantiMcp.js';
 import { mountVoiceOwnerMcp } from './src/lib/voiceOwnerMcp.js';
+import { CascadeEngine } from './src/lib/cascade/engine.js';
+import { synthesizeBase64, ttsReady } from './src/lib/cascade/tts.js';
+import { getCascadeKeys, isElevenLabsVoiceId } from './src/lib/cascade/keys.js';
 
 const VANTAGE_MCP_URL_FOR_DISPLAY = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
 const VANTAGE_BASE_URL = process.env.VANTAGE_BASE_URL || 'https://omokoda.duckdns.org';
@@ -157,20 +160,38 @@ async function callVantageAgentBridge(agentKey: string, text: string): Promise<s
 // audio deltas use, so the client's existing audio player needs no changes.
 async function synthesizeSpeechDirect(text: string, voiceName: string): Promise<string> {
   const { client, hasKey } = getAiClient();
-  if (!hasKey) throw new Error('No Gemini API key available for direct TTS');
+  if (!hasKey) {
+    // C4: Gemini keys absent/dead — fall back to the cascade ElevenLabs
+    // synthesizer so the app still speaks instead of throwing.
+    if (ttsReady()) {
+      console.warn('[TTS] No Gemini API key — falling back to cascade ElevenLabs TTS');
+      return synthesizeBase64(text, voiceName);
+    }
+    throw new Error('No TTS provider available: Gemini key absent and no ELEVENLABS_API_KEY in ~/.vv-cascade-keys.env');
+  }
 
-  const response = await client.models.generateContent({
-    model: 'gemini-2.5-flash-preview-tts',
-    contents: [{ role: 'user', parts: [{ text }] }],
-    config: {
-      responseModalities: [Modality.AUDIO],
-      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
-    },
-  });
+  try {
+    const response = await client.models.generateContent({
+      model: 'gemini-2.5-flash-preview-tts',
+      contents: [{ role: 'user', parts: [{ text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+      },
+    });
 
-  const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-  if (!audioData) throw new Error('Gemini TTS returned no audio data');
-  return audioData;
+    const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!audioData) throw new Error('Gemini TTS returned no audio data');
+    return audioData;
+  } catch (geminiErr: any) {
+    // C4: a dead/broken Gemini key must never silence the app — fall back
+    // to the cascade synthesizer and surface a clear warning.
+    if (ttsReady()) {
+      console.warn('[TTS] Gemini TTS failed, falling back to cascade ElevenLabs:', geminiErr?.message || geminiErr);
+      return synthesizeBase64(text, voiceName);
+    }
+    throw geminiErr;
+  }
 }
 
 /**
@@ -275,6 +296,19 @@ const PORT = 3000;
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 mountVoiceOwnerMcp(app);
+
+// C4: clear startup warning if the cascade providers are unprovisioned —
+// the app degrades gracefully (Gemini fallback / error messages) but the
+// operator should know the default voice path is missing its keys.
+{
+  const keys = getCascadeKeys();
+  const missing: string[] = [];
+  if (!keys.groqApiKey) missing.push('GROQ_API_KEY (STT)');
+  if (!keys.elevenLabsApiKey) missing.push('ELEVENLABS_API_KEY (TTS)');
+  if (missing.length > 0) {
+    console.warn(`[Cascade] WARNING: missing from ~/.vv-cascade-keys.env (0600): ${missing.join(', ')}. Cascade voice turns will fail until provisioned.`);
+  }
+}
 
 // Helper to safely send JSON to WebSocket client
 function sendToClient(ws: WebSocket, payload: any) {
@@ -1379,7 +1413,10 @@ app.post('/api/tools/execute', async (req, res) => {
   }
 });
 
-// Single-shot TTS fallback endpoint
+// Single-shot TTS endpoint. C3: routed through the cascade ElevenLabs
+// synthesizer (the new default voice engine) so the frontend's existing
+// TTS calls keep working with zero Gemini dependency. Gemini remains only
+// as a fallback when an ElevenLabs key is absent but a Gemini key exists.
 app.post('/api/tts', async (req, res) => {
   try {
     const { text, voice = 'Zephyr' } = req.body;
@@ -1387,9 +1424,19 @@ app.post('/api/tts', async (req, res) => {
       return res.status(400).json({ error: 'Text prompt is required' });
     }
 
+    if (ttsReady()) {
+      const audioBase64 = await synthesizeBase64(text, voice);
+      if (audioBase64) {
+        return res.json({ audio: audioBase64, sampleRate: 24000 });
+      }
+      return res.status(500).json({ error: 'No audio returned from ElevenLabs TTS model' });
+    }
+
     const { client, hasKey } = getAiClient();
     if (!hasKey) {
-      return res.status(500).json({ error: 'GEMINI_API_KEY environment variable is missing' });
+      return res.status(500).json({
+        error: 'No TTS provider configured: set ELEVENLABS_API_KEY (in ~/.vv-cascade-keys.env) or GEMINI_API_KEY',
+      });
     }
 
     const response = await client.models.generateContent({
@@ -2102,6 +2149,14 @@ wss.on('connection', (clientWs: WebSocket) => {
   let roster: RosterMember[] = [];
   let voiceNameForOrchestrator = 'Zephyr';
 
+  // Item C cascade voice engine (per-connection, like the Gemini session):
+  // server VAD -> Groq Whisper STT -> bridgeToAgent -> streaming ElevenLabs
+  // TTS with barge-in. Active when the persona is hermes_contabo (default
+  // voice engine per Item C) or when no Gemini keys are present (C4
+  // fallback so the app still speaks).
+  let cascadeEngine: CascadeEngine | null = null;
+  let cascadeActive = false;
+
   /**
    * Routes a finalized user utterance to a real agent brain. For
    * hermes_contabo this now prefers the sessionful Hermes gateway (real
@@ -2124,6 +2179,50 @@ wss.on('connection', (clientWs: WebSocket) => {
     }
     return callVantageAgentBridge(agentKey, text);
   }
+
+  // Item C: per-connection cascade voice engine lifecycle. The engine is
+  // the audio pipe (VAD -> STT -> TTS); the brain is bridgeToAgent above
+  // (sessionful Hermes gateway for hermes_contabo, Vantage relay fallback).
+  function bridgeKeyFor(backend: string): string {
+    return backend === 'hermes' ? activeHermesKey
+      : backend === 'hermes_contabo' ? activeHermesContaboKey
+      : activeOpenClawKey;
+  }
+
+  function startCascadeEngine(config: Record<string, any> = {}): void {
+    stopCascadeEngine();
+    const framework = config.agentFramework || 'native';
+    activeFramework = framework;
+    activeHermesKey = config.hermesAgentKey || DEFAULT_HERMES_AGENT_KEY;
+    activeHermesContaboKey = config.hermesContaboAgentKey || DEFAULT_HERMES_CONTABO_AGENT_KEY;
+    activeOpenClawKey = config.openClawAgentKey || DEFAULT_OPENCLAW_AGENT_KEY;
+    voiceNameForOrchestrator = config.voice || 'Zephyr';
+    if (config.multiAgentEnabled && Array.isArray(config.roster) && config.roster.length > 1) {
+      console.warn(`[Cascade] multi-agent roster requested but cascade mode is single-bridge; using ${framework} alone`);
+    }
+    cascadeActive = true;
+    cascadeEngine = new CascadeEngine({
+      backend: framework,
+      onEvent: (event) => sendToClient(clientWs, event),
+      bridge: (text) => bridgeToAgent(framework, bridgeKeyFor(framework), text),
+      getVoice: () => voiceNameForOrchestrator,
+      vad: {
+        threshold: typeof config.vadThreshold === 'number' ? config.vadThreshold : undefined,
+      },
+    });
+    cascadeEngine.start();
+    console.log(`[Cascade] voice engine active for backend=${framework} (session=${hermesGatewaySessionKey})`);
+  }
+
+  function stopCascadeEngine(): void {
+    if (cascadeEngine) {
+      try {
+        cascadeEngine.stop();
+      } catch (e) {}
+    }
+    cascadeEngine = null;
+    cascadeActive = false;
+  }
   // Real cross-turn memory for the orchestrator's planner -- previously
   // always passed '' for recentHistory, so planTurns() picked who responds
   // with zero awareness of anything said in earlier exchanges (agents could
@@ -2135,6 +2234,7 @@ wss.on('connection', (clientWs: WebSocket) => {
 
   clientWs.on('error', (err: any) => {
     console.warn('[WebSocket] Client socket error (handled):', err?.message || err);
+    stopCascadeEngine();
     if (liveSession) {
       try {
         liveSession.close();
@@ -2608,9 +2708,26 @@ wss.on('connection', (clientWs: WebSocket) => {
       const msg = JSON.parse(data.toString());
 
       if (msg.type === 'config') {
-        await startGeminiSession(msg.config || {});
+        const config = msg.config || {};
+        const framework = config.agentFramework || 'native';
+        // Item C: the cascade is the DEFAULT voice engine for the
+        // hermes_contabo persona, and the C4 fallback whenever Gemini keys
+        // are absent — so the app speaks even with zero Gemini dependency.
+        const geminiOk = getAiClient().hasKey;
+        const useCascade = framework === 'hermes_contabo' || !geminiOk;
+        if (useCascade) {
+          if (framework !== 'hermes_contabo' && !geminiOk) {
+            console.warn(`[Cascade] No Gemini API key — using cascade voice engine for backend=${framework} (C4 fallback)`);
+          }
+          startCascadeEngine(config);
+        } else {
+          stopCascadeEngine();
+          await startGeminiSession(config);
+        }
       } else if (msg.type === 'audio' && msg.audio) {
-        if (liveSession && isSessionActive) {
+        if (cascadeActive && cascadeEngine) {
+          cascadeEngine.pushAudio(msg.audio);
+        } else if (liveSession && isSessionActive) {
           try {
             liveSession.sendRealtimeInput({
               audio: { data: msg.audio, mimeType: 'audio/pcm;rate=16000' },
@@ -2630,7 +2747,9 @@ wss.on('connection', (clientWs: WebSocket) => {
           }
         }
       } else if (msg.type === 'text' && msg.text) {
-        if (liveSession && isSessionActive) {
+        if (cascadeActive && cascadeEngine) {
+          cascadeEngine.pushText(msg.text);
+        } else if (liveSession && isSessionActive) {
           try {
             liveSession.sendRealtimeInput({
               text: msg.text,
@@ -2640,7 +2759,10 @@ wss.on('connection', (clientWs: WebSocket) => {
           }
         }
       } else if (msg.type === 'interrupt') {
-        if (liveSession && isSessionActive) {
+        if (cascadeActive && cascadeEngine) {
+          console.log('[Client] Manual interrupt triggered (cascade)');
+          cascadeEngine.cancel();
+        } else if (liveSession && isSessionActive) {
           console.log('[Client] Manual interrupt triggered');
         }
       } else if (msg.type === 'ping') {
@@ -2653,6 +2775,7 @@ wss.on('connection', (clientWs: WebSocket) => {
 
   clientWs.on('close', () => {
     console.log('[WebSocket] Client disconnected.');
+    stopCascadeEngine();
     if (liveSession) {
       try {
         liveSession.close();
