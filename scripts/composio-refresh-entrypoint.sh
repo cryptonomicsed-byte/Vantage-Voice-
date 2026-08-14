@@ -12,7 +12,18 @@ set -u
 CONFIG="${HERMES_CONFIG:-/opt/data/config.yaml}"
 REFRESH_SCRIPT="${REFRESH_SCRIPT:-/opt/vantage-voice/scripts/composio-refresh.mjs}"
 
-if [ -n "${COMPOSIO_API_KEY:-}" ] || [ -f /root/.vv-cascade-keys.env ] || [ -f /opt/vantage-voice/.vv-cascade-keys.env ]; then
+# The composio key lives in the voice app's .env (same creds the voice
+# server uses). Export it for the refresh script if not already set.
+if [ -z "${COMPOSIO_API_KEY:-}" ] && [ -f /opt/vantage-voice/.env ]; then
+  COMPOSIO_API_KEY="$(grep -E '^COMPOSIO_API_KEY=' /opt/vantage-voice/.env | head -1 | cut -d= -f2- | tr -d '"')"
+  export COMPOSIO_API_KEY
+fi
+if [ -z "${COMPOSIO_USER_ID:-}" ] && [ -f /opt/vantage-voice/.env ]; then
+  COMPOSIO_USER_ID="$(grep -E '^COMPOSIO_USER_ID=' /opt/vantage-voice/.env | head -1 | cut -d= -f2- | tr -d '"')"
+  export COMPOSIO_USER_ID
+fi
+
+if [ -n "${COMPOSIO_API_KEY:-}" ]; then
   echo "[composio-refresh] minting fresh session pre-start (config=${CONFIG})"
   if node "$REFRESH_SCRIPT" --config="$CONFIG"; then
     echo "[composio-refresh] OK — fresh composio session written to config"

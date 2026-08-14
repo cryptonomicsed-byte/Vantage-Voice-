@@ -30,12 +30,16 @@ import { Composio } from '@composio/core';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
-// ── key resolution (never argv/ps; 0600 file or env) ─────────────────────
+// ── key resolution (never argv/ps; 0600 file, voice app .env, or env) ────
 function loadKeys() {
   const candidates = [
     path.join(os.homedir(), '.vv-cascade-keys.env'),
     path.join(ROOT, '.vv-cascade-keys.env'),
     '/root/.vv-cascade-keys.env',
+    // The voice app's own env carries the live COMPOSIO_API_KEY + USER_ID
+    // (the same creds the voice server's composio client uses).
+    '/opt/vantage-voice/.env',
+    path.join(ROOT, '.env'),
   ];
   const out = {};
   for (const c of candidates) {
@@ -46,9 +50,11 @@ function loadKeys() {
         if (eq === -1) continue;
         const k = line.slice(0, eq).trim();
         const v = line.slice(eq + 1).trim().replace(/^"|"$/g, '');
-        if (k && v) out[k] = v;
+        // Prefer the FIRST value found for each key across all candidates;
+        // don't stop at the first file (the cascade keys file has no
+        // COMPOSIO key, but the voice app .env does).
+        if (k && v && !(k in out)) out[k] = v;
       }
-      if (Object.keys(out).length) break;
     } catch { /* next */ }
   }
   return out;
@@ -63,9 +69,12 @@ function log(obj) {
 }
 
 // ── config.yaml composio block rewrite (preserve everything else) ────────
+// The Hermes config lives at the compose-mounted data dir on the host:
+// /opt/hermes-agent-contabo/data/config.yaml (inside the container it is
+// /opt/data/config.yaml, same file via the ./data:/opt/data volume).
 const CONFIG_PATH = process.argv.find((a) => a.startsWith('--config='))?.split('=')[1]
   || process.env.HERMES_CONFIG
-  || '/opt/data/config.yaml';
+  || '/opt/hermes-agent-contabo/data/config.yaml';
 
 function rewriteComposioBlock(yaml, url, apiKey) {
   const lines = yaml.split('\n');
