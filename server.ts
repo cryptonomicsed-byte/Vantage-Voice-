@@ -29,6 +29,15 @@ import {
 } from './src/lib/composioMcp.js';
 import { planTurns, executeTurns, type RosterMember, type OrchestratorDeps } from './src/lib/orchestrator.js';
 import { spawnSwarmCodingTask, listSwarmPanels } from './src/lib/herdrSwarm.js';
+import {
+  initIrantiMcp,
+  buildGeminiDeclarationsForIrantiTools,
+  isIrantiToolName,
+  callIrantiTool,
+  getDiscoveredIrantiTools,
+  toGeminiFunctionName as toIrantiGeminiFunctionName,
+} from './src/lib/irantiMcp.js';
+import { mountVoiceOwnerMcp } from './src/lib/voiceOwnerMcp.js';
 
 const VANTAGE_MCP_URL_FOR_DISPLAY = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
 const VANTAGE_BASE_URL = process.env.VANTAGE_BASE_URL || 'https://omokoda.duckdns.org';
@@ -47,6 +56,74 @@ const DEFAULT_HERMES_AGENT_KEY = process.env.HERMES_AGENT_KEY || '';
 // separate identity/session/memory from the Hostinger one.
 const DEFAULT_HERMES_CONTABO_AGENT_KEY = process.env.HERMES_CONTABO_AGENT_KEY || '';
 const DEFAULT_OPENCLAW_AGENT_KEY = process.env.OPENCLAW_AGENT_KEY || '';
+
+// ── Sessionful Hermes gateway bridge ─────────────────────────────────────
+// The Contabo Hermes instance now runs its own OpenAI-compatible API
+// server (gateway/platforms/api_server.py) on top of the SAME real agent
+// process that already owns Vantage MCP + Composio + memory -- unlike
+// callVantageAgentBridge below (a one-shot text relay through Vantage's
+// copilot/chat with no session, no tool loop), this hits the agent's own
+// HTTP loop directly and reuses one X-Hermes-Session-Id per browser
+// connection so every turn lands in the same Hermes session: real tool
+// calls, real memory, real skills. Falls back to callVantageAgentBridge
+// (relay) if the gateway is unreachable so the app never goes fully dark.
+const HERMES_CONTABO_GATEWAY_URL = process.env.HERMES_CONTABO_GATEWAY_URL || 'http://127.0.0.1:8642';
+const HERMES_CONTABO_GATEWAY_KEY = process.env.HERMES_CONTABO_GATEWAY_KEY || '';
+const HERMES_GATEWAY_MODEL = process.env.HERMES_GATEWAY_MODEL || 'hermes-agent';
+const HERMES_GATEWAY_TIMEOUT_MS = 90_000;
+
+interface HermesGatewayTurnResult {
+  reply: string;
+  sessionId: string | null;
+  toolCalls: number;
+}
+
+/**
+ * One turn against the Hermes gateway's /v1/chat/completions, threading
+ * the caller-supplied session key through X-Hermes-Session-Key so the
+ * gateway resumes (or creates) the matching Hermes agent session. Returns
+ * the session id the gateway assigned so the caller can keep using it, and
+ * a best-effort count of tool calls the agent made this turn (from the
+ * `hermes.tool.progress` bookkeeping the gateway echoes back in headers
+ * when available; 0 if the gateway doesn't report it, which is fine --
+ * this is only used for logging/verification, never for control flow).
+ */
+async function callHermesGatewaySession(
+  sessionKey: string,
+  text: string,
+  gatewayUrl: string = HERMES_CONTABO_GATEWAY_URL,
+  gatewayKey: string = HERMES_CONTABO_GATEWAY_KEY,
+): Promise<HermesGatewayTurnResult> {
+  if (!gatewayKey) throw new Error('Hermes gateway key not configured');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HERMES_GATEWAY_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${gatewayUrl.replace(/\/$/, '')}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${gatewayKey}`,
+        'X-Hermes-Session-Key': sessionKey,
+      },
+      body: JSON.stringify({
+        model: HERMES_GATEWAY_MODEL,
+        messages: [{ role: 'user', content: text }],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`Hermes gateway returned HTTP ${res.status}`);
+    }
+    const sessionId = res.headers.get('x-hermes-session-id');
+    const body: any = await res.json();
+    const reply = body?.choices?.[0]?.message?.content;
+    if (!reply) throw new Error('Hermes gateway returned no reply content');
+    const toolCallsHeader = res.headers.get('x-hermes-tool-calls');
+    return { reply, sessionId, toolCalls: toolCallsHeader ? Number(toolCallsHeader) || 0 : 0 };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 /**
  * Calls a real external agent (Hermes or OpenClaw) through Vantage's own
@@ -142,6 +219,7 @@ async function generateTextWithTools(systemPrompt: string, userPrompt: string, c
         ...liveTools[0].functionDeclarations,
         ...buildGeminiDeclarationsForVantageTools(),
         ...buildGeminiDeclarationsForComposioTools(),
+        ...buildGeminiDeclarationsForIrantiTools(),
       ],
     },
   ];
@@ -196,6 +274,7 @@ process.on('unhandledRejection', (reason: any) => {
 const PORT = 3000;
 const app = express();
 app.use(express.json({ limit: '10mb' }));
+mountVoiceOwnerMcp(app);
 
 // Helper to safely send JSON to WebSocket client
 function sendToClient(ws: WebSocket, payload: any) {
@@ -393,13 +472,13 @@ const calculateDeclaration: FunctionDeclaration = {
 
 const mcpServerClientDeclaration: FunctionDeclaration = {
   name: 'mcp_server_client',
-  description: 'Connect to Model Context Protocol (MCP) servers (Stdio, SSE, WebSocket) to discover capabilities, inspect resources, or invoke MCP tool endpoints.',
+  description: 'Real MCP client for this build\'s two live connections: "vantage" (669 real Vantage platform tools, remote) and "iranti" (Ìrántí sovereign agent-memory mesh -- recall/write/grant/revoke/a2a_recall/dream/echo, local). Use tool_search_retrieval first to find the right tool name, then this to actually call it.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       serverUrlOrCommand: {
         type: Type.STRING,
-        description: 'Server address or command (e.g. "sse://mcp.github.com/sse", "npx -y @modelcontextprotocol/server-filesystem /tmp", "ws://localhost:8080/mcp")',
+        description: 'Which real connection to use: "vantage" or "iranti"',
       },
       action: {
         type: Type.STRING,
@@ -420,17 +499,17 @@ const mcpServerClientDeclaration: FunctionDeclaration = {
 
 const toolSearchRetrievalDeclaration: FunctionDeclaration = {
   name: 'tool_search_retrieval',
-  description: 'Dynamic tool search & semantic retrieval engine over every real tool this agent can call -- Vantage\'s live platform (trading, wallets, buzz/social, genesis/birth, memory vault, glyphindex, guilds, forum, video/podcast/playlists, degen, copytrade, alpha, collectives, mesh, federation, analytics, and more), Composio OAuth connectors, and local owner/swarm controls. Searches by intent or capability keywords to return matching parameter schemas without overloading agent context.',
+  description: 'Dynamic tool search & semantic retrieval engine over every real tool this agent can call -- Vantage\'s live platform (trading, wallets, buzz/social, genesis/birth, memory vault, glyphindex, guilds, forum, video/podcast/playlists, degen, copytrade, alpha, collectives, mesh, federation, analytics, and more), Composio OAuth connectors, Ìrántí\'s sovereign agent-memory mesh (persistent, consent-gated shared memory across the roster -- recall/write/grant/revoke/dream/echo), and local owner/swarm controls. Searches by intent or capability keywords to return matching parameter schemas without overloading agent context.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       query: {
         type: Type.STRING,
-        description: 'Search query describing requested capability or task (e.g. "post to buzz", "birth a new agent", "check wallet balance", "join a guild", "generate a video")',
+        description: 'Search query describing requested capability or task (e.g. "post to buzz", "birth a new agent", "check wallet balance", "join a guild", "generate a video", "recall a memory", "grant memory access")',
       },
       category: {
         type: Type.STRING,
-        description: 'Optional category filter: "all", "local" (owner/swarm/memory/composio-control tools), or "vantage" (live Vantage platform tools)',
+        description: 'Optional category filter: "all", "local" (owner/swarm/memory/composio-control tools), "vantage" (live Vantage platform tools), or "iranti" (Ìrántí memory-mesh tools)',
       },
       topK: {
         type: Type.NUMBER,
@@ -731,6 +810,18 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
       return { status: 'error', source: 'composio_mcp_live', message: err?.message || String(err) };
     }
   }
+  // Real Ìrántí memory-mesh tools (memory_recall, memory_write,
+  // memory_grant, memory_a2a_recall, etc.) -- consent-gated shared memory
+  // across the roster. A denied a2a_recall surfaces Ìrántí's real HTTP 403
+  // ("grant required") as a real error here, never faked as success.
+  if (isIrantiToolName(name)) {
+    try {
+      const content = await callIrantiTool(name, args);
+      return { status: 'ok', source: 'iranti_mcp_live', content };
+    } catch (err: any) {
+      return { status: 'error', source: 'iranti_mcp_live', message: err?.message || String(err) };
+    }
+  }
   if (name === 'get_current_time') {
     const now = new Date();
     return {
@@ -818,26 +909,30 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
   }
 
   if (name === 'mcp_server_client') {
-    // Real implementation, scoped to Vantage's own MCP server -- this is
-    // the ecosystem's real, live MCP endpoint, not a simulated one.
-    // Arbitrary third-party MCP servers (github.com/sse, npx-spawned
-    // stdio servers, etc.) are out of scope here; rather than fake success
-    // for those, say so honestly.
+    // Real implementation, scoped to two real, live MCP servers -- Vantage
+    // (remote HTTP) and Ìrántí (local stdio, the sovereign agent-memory
+    // mesh -- see irantiMcp.ts). Arbitrary third-party MCP servers
+    // (github.com/sse, npx-spawned stdio servers, etc.) are out of scope
+    // here; rather than fake success for those, say so honestly.
     const serverUrl = args.serverUrlOrCommand || 'vantage';
-    const isVantageTarget = /vantage|omokoda/i.test(serverUrl);
-    if (!isVantageTarget) {
+    const isIrantiTarget = /iranti|memory.?mesh/i.test(serverUrl);
+    const isVantageTarget = !isIrantiTarget && /vantage|omokoda/i.test(serverUrl);
+    if (!isVantageTarget && !isIrantiTarget) {
       return {
         status: 'unsupported_server',
-        message: `This build only has a real MCP connection to Vantage. '${serverUrl}' is not wired -- use the real per-tool vantage__* functions, or connect Vantage explicitly.`,
+        message: `This build only has real MCP connections to Vantage and Ìrántí. '${serverUrl}' is not wired -- use the real per-tool vantage__*/iranti__* functions, or specify 'vantage' or 'iranti' explicitly.`,
       };
     }
 
     const action = args.action || 'list_tools';
+    const displayName = isIrantiTarget ? 'Ìrántí (local stdio)' : VANTAGE_MCP_URL_FOR_DISPLAY;
+    const listDecls = isIrantiTarget ? buildGeminiDeclarationsForIrantiTools : buildGeminiDeclarationsForVantageTools;
+    const callFn = isIrantiTarget ? callIrantiTool : callVantageTool;
 
     if (action === 'list_tools') {
-      const tools = buildGeminiDeclarationsForVantageTools();
+      const tools = listDecls();
       return {
-        mcpServer: VANTAGE_MCP_URL_FOR_DISPLAY,
+        mcpServer: displayName,
         actionExecuted: 'list_tools',
         status: 'ok',
         toolCount: tools.length,
@@ -852,9 +947,9 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
       }
       const parsedArgs = args.argumentsJson ? JSON.parse(args.argumentsJson) : {};
       try {
-        const content = await callVantageTool(toolName, parsedArgs);
+        const content = await callFn(toolName, parsedArgs);
         return {
-          mcpServer: VANTAGE_MCP_URL_FOR_DISPLAY,
+          mcpServer: displayName,
           actionExecuted: 'call_tool',
           invokedTool: toolName,
           argsPassed: parsedArgs,
@@ -864,7 +959,7 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
         };
       } catch (err: any) {
         return {
-          mcpServer: VANTAGE_MCP_URL_FOR_DISPLAY,
+          mcpServer: displayName,
           actionExecuted: 'call_tool',
           invokedTool: toolName,
           isError: true,
@@ -874,7 +969,7 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
       }
     }
 
-    return { status: 'unsupported_action', message: `action '${action}' not implemented for the real Vantage MCP connection` };
+    return { status: 'unsupported_action', message: `action '${action}' not implemented for this MCP connection` };
   }
 
   if (name === 'tool_search_retrieval') {
@@ -907,7 +1002,16 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
       desc: t.description || t.name,
     }));
 
-    const ALL_REGISTERED_TOOLS = [...LOCAL_TOOLS, ...vantageTools];
+    // Real Ìrántí memory-mesh tools, discovered live from the local stdio
+    // MCP connection at startup -- memory_recall/write/grant/revoke/
+    // a2a_recall/dream/echo/etc, genuinely callable, not demo filler.
+    const irantiTools = getDiscoveredIrantiTools().map((t) => ({
+      name: toIrantiGeminiFunctionName(t.name),
+      category: 'iranti',
+      desc: t.description || t.name,
+    }));
+
+    const ALL_REGISTERED_TOOLS = [...LOCAL_TOOLS, ...vantageTools, ...irantiTools];
 
     const matched = ALL_REGISTERED_TOOLS.filter((t) => {
       const matchCat = categoryFilter === 'all' || t.category === categoryFilter;
@@ -1113,7 +1217,21 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
       : DEFAULT_OPENCLAW_AGENT_KEY;
     if (!key) return { status: 'error', message: `No agent key configured for ${backend}` };
     try {
-      const reply = await callVantageAgentBridge(key, task);
+      let reply: string;
+      if (backend === 'hermes_contabo' && HERMES_CONTABO_GATEWAY_KEY) {
+        try {
+          // Each delegated task gets its own short-lived gateway session
+          // (not the caller's voice session) -- a real subagent hand-off,
+          // not a reuse of the parent conversation's memory.
+          const delegateSessionKey = `vv_delegate_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          reply = (await callHermesGatewaySession(delegateSessionKey, task)).reply;
+        } catch (err: any) {
+          console.warn('[HermesGateway] delegate_to_agent falling back to Vantage relay:', err?.message || err);
+          reply = await callVantageAgentBridge(key, task);
+        }
+      } else {
+        reply = await callVantageAgentBridge(key, task);
+      }
       return { status: 'ok', backend, reply };
     } catch (err: any) {
       return { status: 'error', message: err?.message || String(err) };
@@ -1967,6 +2085,11 @@ server.on('upgrade', (request, socket, head) => {
 wss.on('connection', (clientWs: WebSocket) => {
   console.log('[WebSocket] Client connected to Speech-to-Speech session.');
 
+  // One Hermes gateway session per browser connection, so every turn this
+  // client sends stays in the same real agent session (memory/tools/skills
+  // carry over) instead of minting a fresh one each time.
+  const hermesGatewaySessionKey = `vv_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
   let liveSession: any = null;
   let isSessionActive = false;
   let pendingUserUtterance = '';
@@ -1978,6 +2101,29 @@ wss.on('connection', (clientWs: WebSocket) => {
   let multiAgentEnabled = false;
   let roster: RosterMember[] = [];
   let voiceNameForOrchestrator = 'Zephyr';
+
+  /**
+   * Routes a finalized user utterance to a real agent brain. For
+   * hermes_contabo this now prefers the sessionful Hermes gateway (real
+   * tool loop + real memory + real skills, same session across turns);
+   * any other backend, or a gateway failure, falls back to the existing
+   * one-shot Vantage copilot/chat relay so the app degrades gracefully
+   * instead of going silent.
+   */
+  async function bridgeToAgent(backend: string, agentKey: string, text: string): Promise<string> {
+    if (backend === 'hermes_contabo' && HERMES_CONTABO_GATEWAY_KEY) {
+      try {
+        const result = await callHermesGatewaySession(hermesGatewaySessionKey, text);
+        console.log(
+          `[HermesGateway] session=${hermesGatewaySessionKey} tool_calls=${result.toolCalls} reply_len=${result.reply.length}`
+        );
+        return result.reply;
+      } catch (err: any) {
+        console.warn('[HermesGateway] falling back to Vantage relay:', err?.message || err);
+      }
+    }
+    return callVantageAgentBridge(agentKey, text);
+  }
   // Real cross-turn memory for the orchestrator's planner -- previously
   // always passed '' for recentHistory, so planTurns() picked who responds
   // with zero awareness of anything said in earlier exchanges (agents could
@@ -2044,6 +2190,11 @@ wss.on('connection', (clientWs: WebSocket) => {
       const composioToolCount = getDiscoveredComposioTools().length;
       if (composioToolCount > 0) {
         systemInstruction = `${systemInstruction}\n\nYou also have real connector tools (COMPOSIO_SEARCH_TOOLS, COMPOSIO_MULTI_EXECUTE_TOOL, etc.) covering Composio's full ~1000-toolkit catalog (Gmail, GitHub, Outlook, Discord, Slack, GitLab, Notion, Dropbox, Salesforce, Trello, and hundreds more), not just a hand-picked few. Use search_composio_toolkits to find the right toolkit by name/keyword, then COMPOSIO_SEARCH_TOOLS/COMPOSIO_MULTI_EXECUTE_TOOL for the actual action -- if a toolkit isn't connected yet, say so honestly and offer to start the real OAuth connection (owner PIN required) rather than pretending you did it.`;
+      }
+
+      const irantiToolCount = getDiscoveredIrantiTools().length;
+      if (irantiToolCount > 0) {
+        systemInstruction = `${systemInstruction}\n\nYou also have real, persistent, consent-gated shared memory via Ìrántí (use tool_search_retrieval with query mentioning "memory"/"recall"/"remember", or mcp_server_client with serverUrlOrCommand "iranti"): memory_write to save something for real, memory_recall to search what you or another agent already remembers (BM25-ranked, not fabricated), memory_grant/memory_revoke to control who else can see a namespace, memory_a2a_recall to read ANOTHER agent's memory (only works if they granted you that namespace -- a real HTTP 403 if not, never a faked answer), memory_status/memory_list/memory_agents for real bookkeeping. In a multi-agent conversation, this is how the roster genuinely remembers things across turns and agents, not just within one exchange's context window -- use it to actually persist and recall shared facts, not just talk about them.`;
       }
 
       // Owner-control tools (API keys, app settings, secure memory) are
@@ -2253,7 +2404,7 @@ wss.on('connection', (clientWs: WebSocket) => {
                         : backend === 'hermes_contabo' ? activeHermesContaboKey
                         : activeOpenClawKey;
                       if (!key) throw new Error(`No agent key configured for ${backend}`);
-                      return callVantageAgentBridge(key, text);
+                      return bridgeToAgent(backend, key, text);
                     },
                     speak: async (text, voice) => {
                       const audioData = await synthesizeSpeechDirect(text, voice);
@@ -2297,7 +2448,7 @@ wss.on('connection', (clientWs: WebSocket) => {
                   activeFramework === 'open_claw' ? activeOpenClawKey :
                   '';
                 if (bridgeKey && utterance && liveSession) {
-                  callVantageAgentBridge(bridgeKey, utterance)
+                  bridgeToAgent(activeFramework, bridgeKey, utterance)
                     .then(async (reply) => {
                       sendToClient(clientWs, {
                         type: 'transcript',
@@ -2549,6 +2700,14 @@ async function startServer() {
   // can actually find and execute.
   initComposioMcp().catch((err) => {
     console.warn('[ComposioMCP] startup discovery failed:', err?.message || err);
+  });
+
+  // Real Ìrántí discovery -- spawns the real local iranti-mcp stdio
+  // process (see irantiMcp.ts). Only succeeds on a host with the Ìrántí
+  // repo + built binary actually present; degrades to 0 tools honestly
+  // elsewhere rather than blocking startup or faking availability.
+  initIrantiMcp().catch((err) => {
+    console.warn('[IrantiMCP] startup discovery failed:', err?.message || err);
   });
 }
 
