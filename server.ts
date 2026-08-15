@@ -81,8 +81,9 @@ const HERMES_GATEWAY_TIMEOUT_MS = 90_000;
 // without ever holding the agent's real X-Agent-Key. Mint once via:
 //   POST https://omokoda.duckdns.org/api/vault/external/connectors
 //   { "name": "vantage-voice", "source": "voice-app" }  (X-Agent-Key header)
+// The ingest endpoint resolves the target agent from the connector token, so
+// no agent-name setting is needed here.
 const VVAULT_BASE = process.env.VVAULT_BASE_URL || 'https://omokoda.duckdns.org';
-const VVAULT_AGENT = process.env.VVAULT_AGENT_NAME || 'Hermes-Contabo';
 const VVAULT_CONNECTOR_KEY = process.env.VVAULT_CONNECTOR_KEY || '';
 
 /** Push a conversation turn into the agent's Vantage memory vault. */
