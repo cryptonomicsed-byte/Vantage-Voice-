@@ -532,7 +532,16 @@ export default function App() {
   // Connect WebSocket with Exponential Backoff Strategy
   const connectWebSocket = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/live-s2s`;
+    // Stable per-browser user id: the Hermes gateway session key is derived
+    // from this, so reconnects AND new conversations keep the same real
+    // agent session (memory/tools/skills carry over) instead of minting a
+    // fresh session each time the page or conversation is opened.
+    let vvUid = localStorage.getItem('vv_hermes_uid');
+    if (!vvUid) {
+      vvUid = (crypto.randomUUID ? crypto.randomUUID() : `u_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`);
+      localStorage.setItem('vv_hermes_uid', vvUid);
+    }
+    const wsUrl = `${protocol}//${window.location.host}/api/live-s2s?uid=${encodeURIComponent(vvUid)}`;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

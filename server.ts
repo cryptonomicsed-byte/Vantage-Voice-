@@ -75,6 +75,52 @@ const HERMES_CONTABO_GATEWAY_KEY = process.env.HERMES_CONTABO_GATEWAY_KEY || '';
 const HERMES_GATEWAY_MODEL = process.env.HERMES_GATEWAY_MODEL || 'hermes-agent';
 const HERMES_GATEWAY_TIMEOUT_MS = 90_000;
 
+// ── Vantage memory vault (Vantage is the memory system) ────────────────────
+// The agent's vault lives on the Vantage platform; a scoped ingest-only
+// connector token (vconn_...) lets this app push conversation turns into it
+// without ever holding the agent's real X-Agent-Key. Mint once via:
+//   POST https://omokoda.duckdns.org/api/vault/external/connectors
+//   { "name": "vantage-voice", "source": "voice-app" }  (X-Agent-Key header)
+const VVAULT_BASE = process.env.VVAULT_BASE_URL || 'https://omokoda.duckdns.org';
+const VVAULT_AGENT = process.env.VVAULT_AGENT_NAME || 'Hermes-Contabo';
+const VVAULT_CONNECTOR_KEY = process.env.VVAULT_CONNECTOR_KEY || '';
+
+/** Push a conversation turn into the agent's Vantage memory vault. */
+async function offloadTurnToVault(
+  conversationId: string,
+  userText: string,
+  assistantText: string
+): Promise<void> {
+  if (!VVAULT_CONNECTOR_KEY) return;
+  try {
+    const body = JSON.stringify({
+      conversation_id: conversationId.slice(0, 16),
+      title: `Voice conversation ${new Date().toISOString().slice(0, 16)}`,
+      resource: 'vantage-voice',
+      messages: [
+        { role: 'user', content: userText.slice(0, 20000) },
+        { role: 'assistant', content: assistantText.slice(0, 20000) },
+      ],
+    });
+    const res = await fetch(`${VVAULT_BASE}/api/vault/external/ingest`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Vault-Connector-Key': VVAULT_CONNECTOR_KEY,
+      },
+      body,
+    });
+    if (!res.ok) {
+      console.warn(`[VaultOffload] ingest failed: HTTP ${res.status}`);
+    } else {
+      const j = await res.json().catch(() => null);
+      console.log(`[VaultOffload] turn stored (conv=${conversationId.slice(0, 16)} note=${j?.note_path || '?'})`);
+    }
+  } catch (err: any) {
+    console.warn('[VaultOffload] error (non-fatal):', err?.message || err);
+  }
+}
+
 interface HermesGatewayTurnResult {
   reply: string;
   sessionId: string | null;
@@ -2119,23 +2165,27 @@ server.on('upgrade', (request, socket, head) => {
     console.warn('[HTTP Upgrade] Socket connection error (handled):', err.message);
   });
 
-  const { pathname } = new URL(request.url || '', `http://${request.headers.host}`);
+  const { pathname, searchParams } = new URL(request.url || '', `http://${request.headers.host}`);
   if (pathname === '/api/live-s2s') {
     wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request);
+      wss.emit('connection', ws, request, searchParams.get('uid') || '');
     });
   } else {
     socket.destroy();
   }
 });
 
-wss.on('connection', (clientWs: WebSocket) => {
+wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string = '') => {
   console.log('[WebSocket] Client connected to Speech-to-Speech session.');
 
-  // One Hermes gateway session per browser connection, so every turn this
-  // client sends stays in the same real agent session (memory/tools/skills
-  // carry over) instead of minting a fresh one each time.
-  const hermesGatewaySessionKey = `vv_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  // One Hermes gateway session per USER (stable across reconnects and new
+  // conversations): the browser sends a persistent ?uid= (localStorage), and
+  // the gateway session key is derived from it, so every turn this user sends
+  // stays in the same real agent session (memory/tools/skills carry over)
+  // instead of minting a fresh one each time they open a new conversation.
+  const hermesGatewaySessionKey = uidFromClient
+    ? `vv_${uidFromClient}`
+    : `vv_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
   let liveSession: any = null;
   let isSessionActive = false;
@@ -2172,6 +2222,11 @@ wss.on('connection', (clientWs: WebSocket) => {
         console.log(
           `[HermesGateway] session=${hermesGatewaySessionKey} tool_calls=${result.toolCalls} reply_len=${result.reply.length}`
         );
+        // Vault offload: push this turn (user utterance + agent reply) into
+        // the agent's Vantage memory vault via the ingest-only connector, so
+        // every conversation is durably stored and searchable there — Vantage
+        // is the memory system; the Hermes session is the working context.
+        void offloadTurnToVault(hermesGatewaySessionKey, text, result.reply);
         return result.reply;
       } catch (err: any) {
         console.warn('[HermesGateway] falling back to Vantage relay:', err?.message || err);
