@@ -17,6 +17,7 @@
 import type { Express, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { verifyOwnerPin } from './ownerPin.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import fs from 'fs';
@@ -100,10 +101,11 @@ function saveMemoryVault(items: MemoryVaultItem[]) {
 }
 
 function checkPin(pin: string): { ok: boolean; message?: string } {
-  const realPin = process.env.OWNER_VOICE_PIN || '';
-  if (!realPin) return { ok: false, message: 'No owner PIN configured on this app instance.' };
-  if (pin !== realPin) return { ok: false, message: 'Incorrect owner PIN.' };
-  return { ok: true };
+  // Shares one gate with the voice tool path (ownerPin.ts): constant-time
+  // compare, escalating lockout, audit log. Sharing matters -- two independent
+  // counters would let an attacker alternate surfaces to double their budget.
+  const result = verifyOwnerPin(pin, 'owner_mcp');
+  return result.ok ? { ok: true } : { ok: false, message: result.message };
 }
 
 function buildServer(): McpServer {

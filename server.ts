@@ -38,9 +38,20 @@ import {
   toGeminiFunctionName as toIrantiGeminiFunctionName,
 } from './src/lib/irantiMcp.js';
 import { mountVoiceOwnerMcp } from './src/lib/voiceOwnerMcp.js';
+import { verifyOwnerPin, auditOwnerAction } from './src/lib/ownerPin.js';
 import { CascadeEngine } from './src/lib/cascade/engine.js';
 import { synthesizeBase64, ttsReady } from './src/lib/cascade/tts.js';
 import { getCascadeKeys, isElevenLabsVoiceId } from './src/lib/cascade/keys.js';
+import {
+  openVoiceSession,
+  closeVoiceSession,
+  recordTurn,
+  recordToolCall,
+  completeToolCall,
+  voiceSessionFleetStatus,
+  isVantageVoiceSessionConfigured,
+  type VoiceSessionHandle,
+} from './src/lib/vantageVoiceSession.js';
 
 const VANTAGE_MCP_URL_FOR_DISPLAY = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
 const VANTAGE_BASE_URL = process.env.VANTAGE_BASE_URL || 'https://omokoda.duckdns.org';
@@ -1162,13 +1173,16 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
 
   // ── Owner-control tools ──
   if (name === 'unlock_owner_controls') {
-    const pin = String(args.pin || '').trim();
-    const realPin = process.env.OWNER_VOICE_PIN || '';
-    if (!realPin) {
-      return { status: 'error', message: 'No owner PIN is configured on this server.' };
-    }
-    if (pin !== realPin) {
-      return { status: 'denied', message: 'Incorrect PIN.' };
+    // Constant-time compare + escalating lockout + audit log; see ownerPin.ts.
+    // The PIN arrives here from spoken audio, so it is attacker-suppliable via
+    // prompt injection as well as by whoever is in the room.
+    const result = verifyOwnerPin(String(args.pin || '').trim(), 'voice_tool');
+    if (!result.ok) {
+      return {
+        status: result.reason === 'not_configured' ? 'error' : 'denied',
+        message: result.message,
+        ...(result.retryAfterMs ? { retry_after_ms: result.retryAfterMs } : {}),
+      };
     }
     ctx.unlockOwner();
     return { status: 'unlocked', message: 'Owner controls unlocked for this session.' };
@@ -1193,6 +1207,8 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
       return { status: 'confirmation_required', message: `${keyName} is already set. Ask the user to confirm overwriting it, then call again with confirmed=true.` };
     }
     setEnvVar(keyName, String(args.value || ''));
+    // This rewrites .env on disk. Record that it happened -- never the value.
+    auditOwnerAction('set_api_key', { key: keyName, overwrote: exists });
     return { status: 'ok', message: `${keyName} ${exists ? 'updated' : 'added'}. Takes effect immediately.` };
   }
 
@@ -1206,6 +1222,7 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
       return { status: 'confirmation_required', message: `Removing ${keyName} cannot be undone. Ask the user to explicitly confirm, then call again with confirmed=true.` };
     }
     removeEnvVar(keyName);
+    auditOwnerAction('remove_api_key', { key: keyName });
     return { status: 'ok', message: `${keyName} removed.` };
   }
 
@@ -1259,6 +1276,7 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
     }
     try {
       await deleteRealConnection(String(args.connectionId || ''));
+      auditOwnerAction('disconnect_composio_toolkit', { connectionId: String(args.connectionId || '') });
       return { status: 'ok', message: 'Disconnected.' };
     } catch (err: any) {
       return { status: 'error', message: err?.message || String(err) };
@@ -1352,6 +1370,14 @@ app.get('/api/health', (req, res) => {
     hasApiKey: hasKey,
     timestamp: new Date().toISOString(),
   });
+});
+
+// Whether conversations are actually being recorded on Vantage. Deliberately
+// explicit: `configured:false` means nothing is being persisted at all, and
+// `degradedSessions > 0` means writes are failing, so neither state can be
+// mistaken for a healthy one by reading /api/health alone.
+app.get('/api/vantage/voice-session/status', (req, res) => {
+  res.json(voiceSessionFleetStatus());
 });
 
 // ── Real OAuth connector routes (Composio-backed) ──
@@ -2191,6 +2217,9 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
   let liveSession: any = null;
   let isSessionActive = false;
   let pendingUserUtterance = '';
+  // Model side of the same turn, accumulated so the assistant's reply can be
+  // persisted to Vantage alongside the user's utterance on turnComplete.
+  let pendingModelReply = '';
   let activeFramework: string = 'native';
   let activeHermesKey = '';
   let activeHermesContaboKey = '';
@@ -2207,6 +2236,37 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
   // fallback so the app still speaks).
   let cascadeEngine: CascadeEngine | null = null;
   let cascadeActive = false;
+
+  // Vantage-side record of this conversation. Opened lazily on the first turn
+  // rather than at connect, so a browser that opens a socket and never speaks
+  // doesn't litter Vantage with empty sessions. Null whenever Vantage is
+  // unconfigured or unreachable -- the call proceeds regardless, but every
+  // failure is logged rather than swallowed.
+  let vantageVoiceSession: VoiceSessionHandle | null = null;
+  let vantageSessionOpening: Promise<void> | null = null;
+
+  async function ensureVantageVoiceSession(): Promise<void> {
+    if (vantageVoiceSession || !isVantageVoiceSessionConfigured()) return;
+    if (!vantageSessionOpening) {
+      vantageSessionOpening = (async () => {
+        vantageVoiceSession = await openVoiceSession({
+          engine: cascadeActive ? 'cascade' : 'gemini_live',
+          framework: activeFramework,
+          voice: voiceNameForOrchestrator,
+          metadata: { hermes_gateway_session: hermesGatewaySessionKey },
+        });
+      })();
+    }
+    await vantageSessionOpening;
+  }
+
+  /** Mirror a completed turn into Vantage. Never awaited on the audio path. */
+  function persistTurn(role: 'user' | 'assistant', text: string): void {
+    if (!text.trim() || !isVantageVoiceSessionConfigured()) return;
+    void ensureVantageVoiceSession()
+      .then(() => recordTurn(vantageVoiceSession, role, text))
+      .catch((err) => console.warn('[VantageVoiceSession] persistTurn failed:', err?.message || err));
+  }
 
   /**
    * Routes a finalized user utterance to a real agent brain. For
@@ -2228,6 +2288,11 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
         // every conversation is durably stored and searchable there — Vantage
         // is the memory system; the Hermes session is the working context.
         void offloadTurnToVault(hermesGatewaySessionKey, text, result.reply);
+        // Same exchange, recorded as a first-class Vantage voice session turn.
+        // The vault offload above is the memory-note view of it; this is the
+        // session/transcript view the dashboard and transcript search read.
+        persistTurn('user', text);
+        persistTurn('assistant', result.reply);
         return result.reply;
       } catch (err: any) {
         console.warn('[HermesGateway] falling back to Vantage relay:', err?.message || err);
@@ -2490,6 +2555,7 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
               // (no "Audio") -- confirmed against raw wire messages. Was
               // reading the wrong field name, so this never fired.
               const outputTranscription = message.serverContent?.outputTranscription?.text;
+              if (outputTranscription) pendingModelReply += outputTranscription;
               if (outputTranscription && !multiAgentEnabled) {
                 sendToClient(clientWs, {
                   type: 'transcript',
@@ -2532,6 +2598,21 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
 
                 const utterance = pendingUserUtterance.trim();
                 pendingUserUtterance = '';
+
+                // Mirror the completed exchange into Vantage. Ordered
+                // user-then-assistant so the persisted transcript reads the way
+                // the conversation actually happened.
+                const modelReply = pendingModelReply.trim();
+                pendingModelReply = '';
+                if (utterance || modelReply) {
+                  void (async () => {
+                    await ensureVantageVoiceSession();
+                    if (utterance) await recordTurn(vantageVoiceSession, 'user', utterance);
+                    if (modelReply) await recordTurn(vantageVoiceSession, 'assistant', modelReply);
+                  })().catch((err) =>
+                    console.warn('[VantageVoiceSession] turn persist failed:', err?.message || err)
+                  );
+                }
 
                 // Real multi-agent orchestration: plan which roster
                 // member(s) respond and execute their turns sequentially,
@@ -2668,6 +2749,18 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
                       toolArgs: call.args,
                     });
 
+                    // Audit trail: logged before the tool runs, so one that
+                    // hangs or kills the session still leaves a record that it
+                    // was invoked and with what.
+                    await ensureVantageVoiceSession();
+                    const auditId = await recordToolCall(
+                      vantageVoiceSession,
+                      call.name,
+                      isVantageToolName(call.name) ? 'vantage_mcp' : 'local',
+                      call.args
+                    );
+                    const toolStartedAt = Date.now();
+
                     const result = await executeToolCall(call.name, call.args, {
                       ownerUnlocked,
                       unlockOwner: () => { ownerUnlocked = true; },
@@ -2682,6 +2775,15 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
                         });
                       },
                     });
+
+                    void completeToolCall(
+                      vantageVoiceSession,
+                      auditId,
+                      result,
+                      (result as any)?.status === 'error',
+                      Date.now() - toolStartedAt
+                    );
+
                     responses.push({
                       id: call.id,
                       name: call.name,
@@ -2839,6 +2941,10 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
       liveSession = null;
     }
     isSessionActive = false;
+    // Close the Vantage-side session too, so it stops showing as live on the
+    // dashboard and its scoped token is burned rather than left valid.
+    void closeVoiceSession(vantageVoiceSession, 'client_disconnected');
+    vantageVoiceSession = null;
   });
 });
 
