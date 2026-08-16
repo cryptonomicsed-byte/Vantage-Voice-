@@ -114,6 +114,41 @@ export function isVantageToolName(geminiFunctionName: string): boolean {
   return nameMap.has(geminiFunctionName);
 }
 
+/**
+ * Vantage tools that move money or mint credentials.
+ *
+ * These arrive over MCP and were dispatched with no gate at all — the owner PIN
+ * only ever covered this app's own local tools — so a spoken sentence could
+ * place a real order or generate a wallet. Since tool arguments derive from
+ * whatever was said near a live microphone, that is reachable by prompt
+ * injection as well as by whoever is in the room.
+ *
+ * Matched on the underlying Vantage tool name rather than the Gemini alias, and
+ * deliberately by intent (verbs that spend or sign) rather than by an
+ * enumerated list, which would silently miss every endpoint added later.
+ */
+/** Test seam: the real map is populated by connecting to Vantage's MCP server. */
+export function __setNameMapForTests(map: Map<string, string>): void {
+  nameMap.clear();
+  for (const [alias, real] of map) nameMap.set(alias, real);
+}
+
+const MONEY_MOVING = [
+  /order/i, /trade/i, /trading/i, /wallet/i, /execute/i,
+  /withdraw/i, /transfer/i, /swap/i, /buy/i, /sell/i, /sign/i,
+];
+
+const READ_ONLY_VERBS = /^(get|list|read|show|fetch|search|status)/i;
+
+export function isMoneyMovingVantageTool(geminiFunctionName: string): boolean {
+  const real = nameMap.get(geminiFunctionName);
+  if (!real) return false;
+  // Reading an order back is not spending. Gating reads too would push people
+  // to unlock for everything, which defeats the gate.
+  if (READ_ONLY_VERBS.test(real)) return false;
+  return MONEY_MOVING.some((pattern) => pattern.test(real));
+}
+
 /** Best-effort JSON Schema -> Gemini Type mapping for the handful of shapes fastapi-mcp actually emits. */
 function mapSchemaType(jsonType: string | undefined): Type {
   switch (jsonType) {

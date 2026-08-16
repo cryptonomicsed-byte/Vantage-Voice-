@@ -9,6 +9,7 @@ import {
   initVantageMcp,
   buildGeminiDeclarationsForVantageTools,
   isVantageToolName,
+  isMoneyMovingVantageTool,
   callVantageTool,
   getDiscoveredTools,
   toGeminiFunctionName,
@@ -882,8 +883,21 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
   // hardcoded. Route them to the real MCP client before falling through
   // to the static demo tool handlers below.
   if (isVantageToolName(name)) {
+    // Money-moving Vantage tools sit behind the same owner unlock as this
+    // app's local privileged tools. They were previously dispatched ungated,
+    // so a spoken sentence could place a real order or mint a wallet.
+    if (isMoneyMovingVantageTool(name) && !ctx.ownerUnlocked) {
+      auditOwnerAction('vantage_money_tool_blocked', { tool: name }, 'denied');
+      return {
+        status: 'owner_unlock_required',
+        message: `${name} can move funds. Say the owner PIN first to unlock it.`,
+      };
+    }
     try {
       const content = await callVantageTool(name, args);
+      if (isMoneyMovingVantageTool(name)) {
+        auditOwnerAction('vantage_money_tool', { tool: name });
+      }
       return { status: 'ok', source: 'vantage_mcp_live', content };
     } catch (err: any) {
       return { status: 'error', source: 'vantage_mcp_live', message: err?.message || String(err) };
