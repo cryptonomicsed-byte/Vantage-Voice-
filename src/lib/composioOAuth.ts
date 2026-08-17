@@ -9,7 +9,7 @@
  * just creates a session for this app's single user, starts a real
  * authorize() redirect, and reports real connection status.
  */
-import { Composio } from '@composio/core';
+import { Composio, ConnectedAccountStatuses, type ConnectedAccountStatus } from '@composio/core';
 
 const COMPOSIO_API_KEY = process.env.COMPOSIO_API_KEY || '';
 // Single-user app -- one stable Composio user id for the whole instance,
@@ -19,9 +19,19 @@ const COMPOSIO_USER_ID = process.env.COMPOSIO_USER_ID || 'vantage-voice-owner';
 
 let client: Composio | null = null;
 function getClient(): Composio {
+  // A cached (or test-injected) client short-circuits the key check: the
+  // whole point of __setClientForTests is exercising this module without a
+  // real COMPOSIO_API_KEY.
+  if (client) return client;
   if (!COMPOSIO_API_KEY) throw new Error('COMPOSIO_API_KEY is not set');
-  if (!client) client = new Composio({ apiKey: COMPOSIO_API_KEY });
+  client = new Composio({ apiKey: COMPOSIO_API_KEY });
   return client;
+}
+
+/** Test-only seam: inject a fake client so the alias-collision retry logic
+ * can be exercised without a real Composio API key or network. */
+export function __setClientForTests(fake: Composio | null): void {
+  client = fake;
 }
 
 export function isComposioConfigured(): boolean {
@@ -69,30 +79,98 @@ export async function listRealConnections(): Promise<RealConnectedAccount[]> {
   }));
 }
 
+// Every status a connected account can be in. Named explicitly (rather than
+// leaving Composio's list endpoint to apply whatever it defaults to when no
+// `statuses` filter is given) because the case this exists for is a
+// connection stuck in INITIATED/INITIALIZING -- an OAuth attempt that was
+// started but never completed, e.g. the popup got closed. That connection
+// still holds its alias on Composio's side; if it doesn't show up in an
+// unfiltered/default-filtered list, the pre-emptive cleanup below silently
+// does nothing and authorize() collides with it anyway.
+const ALL_CONNECTION_STATUSES = Object.values(ConnectedAccountStatuses) as ConnectedAccountStatus[];
+
+async function findConnectionsByAlias(alias: string, toolkitSlug: string) {
+  const composio = getClient();
+  const result = await composio.connectedAccounts.list({
+    userIds: [COMPOSIO_USER_ID],
+    toolkitSlugs: [toolkitSlug],
+    statuses: ALL_CONNECTION_STATUSES,
+  });
+  const items: any[] = (result as any)?.items || [];
+  return items.filter((i) => i.alias === alias) as { id: string }[];
+}
+
+/** Deletes every connection under this alias, across all statuses. Returns
+ * how many were actually removed, so a caller can tell "nothing to clean up"
+ * apart from "cleanup ran but didn't help". */
+async function removeConnectionsByAlias(alias: string, toolkitSlug: string): Promise<number> {
+  const composio = getClient();
+  const stale = await findConnectionsByAlias(alias, toolkitSlug);
+  let removed = 0;
+  for (const c of stale) {
+    try {
+      await composio.connectedAccounts.delete(c.id);
+      removed++;
+    } catch {
+      /* best-effort; if this leaves the alias still taken, the retry in
+         startRealOAuth surfaces Composio's real error instead of looping */
+    }
+  }
+  return removed;
+}
+
+/** Composio's specific "alias already in use" collision (code 600, slug
+ * ConnectedAccount_BadRequest) -- distinct from any other 400 authorize()
+ * could raise, which should NOT trigger a forced cleanup + retry. */
+function isAliasCollision(err: unknown): boolean {
+  const anyErr = err as any;
+  if (anyErr?.status === 400 && anyErr?.error?.error?.slug === 'ConnectedAccount_BadRequest') {
+    return true;
+  }
+  // Fallback for however a differently-shaped error surfaces this same
+  // condition -- matched on both words so an unrelated 400 mentioning only
+  // one of them isn't mistaken for this.
+  const msg = typeof anyErr?.message === 'string' ? anyErr.message : String(err);
+  return /alias/i.test(msg) && /already in use/i.test(msg);
+}
+
 /**
  * Starts a real OAuth authorize flow for a toolkit. Returns the real
- * redirectUrl the user must visit to approve access. If a connection with
- * this alias already exists (from a previous attempt), it's removed first
- * so re-connecting doesn't hit Composio's alias-collision error.
+ * redirectUrl the user must visit to approve access.
+ *
+ * Re-connecting the same toolkit reuses this app's fixed alias
+ * (vantage-voice-{toolkitSlug}), so a leftover connection from a previous
+ * attempt is removed first. If that pre-emptive pass still misses it --
+ * see ALL_CONNECTION_STATUSES above for why it might -- authorize()'s own
+ * "already in use" error is caught, answered with a forced re-lookup and
+ * delete, and the authorize call is retried once. Driven by Composio's own
+ * report that the alias is taken, rather than by guessing up front which
+ * status filter would have caught it.
  */
 export async function startRealOAuth(toolkitSlug: string): Promise<{ redirectUrl: string; connectionId: string }> {
   assertValidSlug(toolkitSlug);
   const composio = getClient();
   const alias = `vantage-voice-${toolkitSlug}`;
 
-  const existing = await listRealConnections();
-  const stale = existing.find((c) => c.alias === alias);
-  if (stale) {
-    try {
-      await composio.connectedAccounts.delete(stale.id);
-    } catch {
-      /* best-effort cleanup; authorize() below will surface a real error if this still collides */
-    }
-  }
+  await removeConnectionsByAlias(alias, toolkitSlug);
 
   const session = await composio.create(COMPOSIO_USER_ID);
-  const auth = await session.authorize(toolkitSlug, { alias });
-  return { redirectUrl: auth.redirectUrl, connectionId: (auth as any).id };
+  try {
+    const auth = await session.authorize(toolkitSlug, { alias });
+    return { redirectUrl: auth.redirectUrl, connectionId: (auth as any).id };
+  } catch (err) {
+    if (!isAliasCollision(err)) throw err;
+
+    const removed = await removeConnectionsByAlias(alias, toolkitSlug);
+    if (removed === 0) {
+      // Nothing found to clean up and Composio still says it's taken -- not
+      // something a retry would fix (e.g. the alias belongs to a different
+      // Composio project/entity). Surface the real error rather than loop.
+      throw err;
+    }
+    const retryAuth = await session.authorize(toolkitSlug, { alias });
+    return { redirectUrl: retryAuth.redirectUrl, connectionId: (retryAuth as any).id };
+  }
 }
 
 export async function deleteRealConnection(connectionId: string): Promise<void> {
