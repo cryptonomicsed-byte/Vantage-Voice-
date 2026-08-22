@@ -23,7 +23,8 @@ const OMOKODA2_KERNEL_URL = process.env.OMOKODA2_KERNEL_URL || 'http://127.0.0.1
 const OMOKODA2_AGENT_NAME = process.env.OMOKODA2_AGENT_NAME || 'vantage-voice';
 const OMOKODA2_THINK_TIMEOUT_MS = 60_000;
 
-const AGENT_STATE_PATH = path.join(process.cwd(), 'data', 'omokoda2-agent.json');
+const AGENT_STATE_PATH =
+  process.env.OMOKODA2_AGENT_STATE_PATH || path.join(process.cwd(), 'data', 'omokoda2-agent.json');
 
 interface Omokoda2AgentState {
   agentId: string;
