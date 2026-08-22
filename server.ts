@@ -39,7 +39,7 @@ import {
   toGeminiFunctionName as toIrantiGeminiFunctionName,
 } from './src/lib/irantiMcp.js';
 import { mountVoiceOwnerMcp } from './src/lib/voiceOwnerMcp.js';
-import { bridgeOmokoda2 } from './src/lib/omokoda2.js';
+import { bridgeOmokoda2, getOmokoda2GlyphMemory, mergeOmokoda2GlyphMemory } from './src/lib/omokoda2.js';
 import { verifyOwnerPin, auditOwnerAction } from './src/lib/ownerPin.js';
 import { CascadeEngine } from './src/lib/cascade/engine.js';
 import { synthesizeBase64, ttsReady } from './src/lib/cascade/tts.js';
@@ -829,6 +829,20 @@ const storeMemoryVaultDeclaration: FunctionDeclaration = {
   },
 };
 
+const recallOmokoda2MemoryDeclaration: FunctionDeclaration = {
+  name: 'recall_omokoda2_memory',
+  description: 'Read the Omo-Koda2 persona\'s own native memory (its GlyphIndex graph -- metadata/tags/relations, never raw memory content, which stays sealed in its vault). Use "topic" for a keyword/tag search, or omit it to describe the whole graph shape.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      topic: {
+        type: Type.STRING,
+        description: 'Optional tag or canonical id to search/describe within the persona\'s memory graph',
+      },
+    },
+  },
+};
+
 // Every tool below is real: it either does a genuine computation
 // (get_current_time, calculate), or bridges to a real live system
 // (Vantage MCP, Composio, owner-controls, the persistent memory vault).
@@ -849,6 +863,7 @@ const liveTools = [
       toolSearchRetrievalDeclaration,
       queryMemoryVaultDeclaration,
       storeMemoryVaultDeclaration,
+      recallOmokoda2MemoryDeclaration,
       unlockOwnerControlsDeclaration,
       listApiKeysDeclaration,
       setApiKeyDeclaration,
@@ -1186,6 +1201,18 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
     return { status: 'memory_saved', savedItem: item, message: `Remembered "${key}" in ${tier.toUpperCase()} memory tier.` };
   }
 
+  if (name === 'recall_omokoda2_memory') {
+    const topic = args.topic ? String(args.topic) : undefined;
+    try {
+      const graph = topic
+        ? await getOmokoda2GlyphMemory({ describe: topic }).catch(() => getOmokoda2GlyphMemory({ tags: [topic] }))
+        : await getOmokoda2GlyphMemory();
+      return { status: 'ok', graph };
+    } catch (err: any) {
+      return { status: 'error', message: err?.message || String(err) };
+    }
+  }
+
   // ── Owner-control tools ──
   if (name === 'unlock_owner_controls') {
     // Constant-time compare + escalating lockout + audit log; see ownerPin.ts.
@@ -1393,6 +1420,36 @@ app.get('/api/health', (req, res) => {
 // mistaken for a healthy one by reading /api/health alone.
 app.get('/api/vantage/voice-session/status', (req, res) => {
   res.json(voiceSessionFleetStatus());
+});
+
+// ── Omo-Koda2 persona native memory (Phase 2) ──────────────────────────────
+// Read/write leg of this app's Omo-Koda2 persona's own GlyphIndex memory,
+// proxied straight through to the kernel (see src/lib/omokoda2.ts for the
+// sealed-vault boundary this respects). Read supports the same
+// describe/walk/tags/relations query shape the kernel itself defines.
+app.get('/api/omokoda2/memory', async (req, res) => {
+  try {
+    const depthRaw = req.query.depth;
+    const graph = await getOmokoda2GlyphMemory({
+      describe: typeof req.query.describe === 'string' ? req.query.describe : undefined,
+      walk: typeof req.query.walk === 'string' ? req.query.walk : undefined,
+      depth: typeof depthRaw === 'string' ? Number(depthRaw) : undefined,
+      tags: typeof req.query.tags === 'string' ? req.query.tags.split(',').filter(Boolean) : undefined,
+      relations: typeof req.query.relations === 'string' ? req.query.relations.split(',').filter(Boolean) : undefined,
+    });
+    res.json(graph);
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/omokoda2/memory/merge', express.json(), async (req, res) => {
+  try {
+    const merged = await mergeOmokoda2GlyphMemory(req.body);
+    res.json(merged);
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message || String(err) });
+  }
 });
 
 // ── Real OAuth connector routes (Composio-backed) ──

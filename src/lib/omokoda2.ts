@@ -127,3 +127,71 @@ export async function bridgeOmokoda2(text: string): Promise<string> {
     clearTimeout(timeout);
   }
 }
+
+/**
+ * Phase 2 -- native memory read/write for this app's Omo-Koda2 persona.
+ * Deliberately NOT a duplicate memory store: this reads/writes the agent's
+ * own native GlyphIndex projection on the kernel (GET/POST /v1/vault/glyph*),
+ * the same content-addressed, metadata-only graph any other ecosystem agent
+ * (Axiom, mnemopi, larql, zerolang) consumes -- see get_glyph_memory's doc
+ * comment in omokoda-core/src/server.rs: plaintext memory content always
+ * stays sealed in the agent's own vault, only tags/relations/locators are
+ * ever exposed here. Vantage Voice never gets to see or store raw memory
+ * content through this path, only its content-addressed shape.
+ *
+ * Both kernel routes currently only check X-Agent-Id (no X-Agent-Key
+ * verification on these two specifically, unlike /v1/think/-act) -- sending
+ * the key anyway costs nothing and matches every other call this app makes,
+ * so a future kernel-side tightening doesn't require a client-side change.
+ */
+export interface GlyphMemoryQuery {
+  describe?: string;
+  walk?: string;
+  depth?: number;
+  tags?: string[];
+  relations?: string[];
+}
+
+export async function getOmokoda2GlyphMemory(query: GlyphMemoryQuery = {}): Promise<any> {
+  const agent = await ensureOmokoda2Agent();
+  const params = new URLSearchParams();
+  if (query.describe) params.set('describe', query.describe);
+  if (query.walk) params.set('walk', query.walk);
+  if (query.depth != null) params.set('depth', String(query.depth));
+  if (query.tags?.length) params.set('tags', query.tags.join(','));
+  if (query.relations?.length) params.set('relations', query.relations.join(','));
+  const qs = params.toString();
+  const res = await fetch(
+    `${OMOKODA2_KERNEL_URL.replace(/\/$/, '')}/v1/vault/glyph${qs ? `?${qs}` : ''}`,
+    { headers: { 'X-Agent-Id': agent.agentId, 'X-Agent-Key': agent.agentKey } }
+  );
+  if (!res.ok) throw new Error(`Omo-Koda2 /v1/vault/glyph returned HTTP ${res.status}`);
+  const body: any = await res.json();
+  if (body?.error) throw new Error(`Omo-Koda2 /v1/vault/glyph error: ${body.error}`);
+  return body;
+}
+
+/**
+ * Agent-to-agent memory exchange: merges another agent's GlyphGraph snapshot
+ * (as served by getOmokoda2GlyphMemory, from this agent or a different one)
+ * into this persona's live projection. Read-safe per the kernel's own
+ * contract -- this persona's sealed memory is untouched; only the returned
+ * union graph reflects the merge. Used by the minipae bridge (Phase 3) and
+ * any future cross-agent memory sync.
+ */
+export async function mergeOmokoda2GlyphMemory(incomingGraph: unknown): Promise<any> {
+  const agent = await ensureOmokoda2Agent();
+  const res = await fetch(`${OMOKODA2_KERNEL_URL.replace(/\/$/, '')}/v1/vault/glyph/merge`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Agent-Id': agent.agentId,
+      'X-Agent-Key': agent.agentKey,
+    },
+    body: JSON.stringify(incomingGraph),
+  });
+  if (!res.ok) throw new Error(`Omo-Koda2 /v1/vault/glyph/merge returned HTTP ${res.status}`);
+  const body: any = await res.json();
+  if (body?.error) throw new Error(`Omo-Koda2 /v1/vault/glyph/merge error: ${body.error}`);
+  return body;
+}
