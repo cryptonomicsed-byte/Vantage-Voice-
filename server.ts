@@ -39,6 +39,7 @@ import {
   toGeminiFunctionName as toIrantiGeminiFunctionName,
 } from './src/lib/irantiMcp.js';
 import { mountVoiceOwnerMcp } from './src/lib/voiceOwnerMcp.js';
+import { bridgeOmokoda2 } from './src/lib/omokoda2.js';
 import { verifyOwnerPin, auditOwnerAction } from './src/lib/ownerPin.js';
 import { CascadeEngine } from './src/lib/cascade/engine.js';
 import { synthesizeBase64, ttsReady } from './src/lib/cascade/tts.js';
@@ -1303,8 +1304,8 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
     // and session-scoped, not a credential/settings change.
     if (!ctx.applyRosterChange) return { status: 'error', message: 'No active client session.' };
     const backend = String(args.backend || '');
-    if (!['native', 'hermes', 'hermes_contabo', 'open_claw'].includes(backend)) {
-      return { status: 'error', message: 'backend must be native, hermes, hermes_contabo, or open_claw' };
+    if (!['native', 'hermes', 'hermes_contabo', 'open_claw', 'omokoda2'].includes(backend)) {
+      return { status: 'error', message: 'backend must be native, hermes, hermes_contabo, open_claw, or omokoda2' };
     }
     ctx.applyRosterChange('add', backend, args.voice ? String(args.voice) : undefined);
     return { status: 'ok', message: `${backend} added to the roster.` };
@@ -2291,6 +2292,16 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
    * instead of going silent.
    */
   async function bridgeToAgent(backend: string, agentKey: string, text: string): Promise<string> {
+    if (backend === 'omokoda2') {
+      // Real Omo-Koda2 kernel persona -- its own birthed identity/tools,
+      // not a Vantage relay. No agentKey param here; the kernel agent's
+      // own X-Agent-Id/-Key are held internally by omokoda2.ts.
+      const reply = await bridgeOmokoda2(text);
+      void offloadTurnToVault(hermesGatewaySessionKey, text, reply);
+      persistTurn('user', text);
+      persistTurn('assistant', reply);
+      return reply;
+    }
     if (backend === 'hermes_contabo' && HERMES_CONTABO_GATEWAY_KEY) {
       try {
         const result = await callHermesGatewaySession(hermesGatewaySessionKey, text);
@@ -2321,6 +2332,7 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
   function bridgeKeyFor(backend: string): string {
     return backend === 'hermes' ? activeHermesKey
       : backend === 'hermes_contabo' ? activeHermesContaboKey
+      : backend === 'omokoda2' ? '' // unused -- omokoda2.ts holds its own X-Agent-Id/-Key
       : activeOpenClawKey;
   }
 
@@ -2651,6 +2663,7 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
                         },
                       }),
                     callBridge: async (backend, text) => {
+                      if (backend === 'omokoda2') return bridgeToAgent(backend, '', text);
                       const key = backend === 'hermes' ? activeHermesKey
                         : backend === 'hermes_contabo' ? activeHermesContaboKey
                         : activeOpenClawKey;
@@ -2886,9 +2899,11 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
         // hermes_contabo persona, and the C4 fallback whenever Gemini keys
         // are absent — so the app speaks even with zero Gemini dependency.
         const geminiOk = getAiClient().hasKey;
-        const useCascade = framework === 'hermes_contabo' || !geminiOk;
+        // omokoda2 has no Gemini Live text-injection path wired (Phase 1
+        // is voice I/O only) -- always cascade for it, same as hermes_contabo.
+        const useCascade = framework === 'hermes_contabo' || framework === 'omokoda2' || !geminiOk;
         if (useCascade) {
-          if (framework !== 'hermes_contabo' && !geminiOk) {
+          if (framework !== 'hermes_contabo' && framework !== 'omokoda2' && !geminiOk) {
             console.warn(`[Cascade] No Gemini API key — using cascade voice engine for backend=${framework} (C4 fallback)`);
           }
           startCascadeEngine(config);

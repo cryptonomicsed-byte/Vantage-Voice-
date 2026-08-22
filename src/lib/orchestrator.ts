@@ -8,7 +8,7 @@
  */
 import type { GoogleGenAI } from '@google/genai';
 
-export type RosterBackend = 'native' | 'hermes' | 'hermes_contabo' | 'open_claw';
+export type RosterBackend = 'native' | 'hermes' | 'hermes_contabo' | 'open_claw' | 'omokoda2';
 
 export interface RosterMember {
   id: string;
@@ -27,8 +27,8 @@ export interface OrchestratorDeps {
   generateText: (systemPrompt: string, userPrompt: string) => Promise<string>;
   /** Real, non-live, tool-ENABLED Gemini call (generateTextWithTools in server.ts) -- used for native's actual conversational turns, so native keeps its real Vantage/Composio tool access inside a multi-agent exchange instead of losing it the moment a 2nd roster member joins. */
   generateNativeReply: (systemPrompt: string, userPrompt: string) => Promise<string>;
-  /** Real Hermes/OpenClaw bridge call (callVantageAgentBridge in server.ts). */
-  callBridge: (backend: 'hermes' | 'hermes_contabo' | 'open_claw', text: string) => Promise<string>;
+  /** Real Hermes/OpenClaw/Omo-Koda2 bridge call (bridgeToAgent in server.ts). */
+  callBridge: (backend: 'hermes' | 'hermes_contabo' | 'open_claw' | 'omokoda2', text: string) => Promise<string>;
   /** Real direct TTS + WS audio send for one spoken turn. */
   speak: (text: string, voice: string) => Promise<void>;
   /** Real WS transcript event, tagged with who's speaking. */
