@@ -54,6 +54,7 @@ import {
   isVantageVoiceSessionConfigured,
   type VoiceSessionHandle,
 } from './src/lib/vantageVoiceSession.js';
+import { bridgeToHermesDirect, mintHermesSessionKey, oneShotHermesTurn, HermesStatefulClient, type HermesSessionCtx, type HermesToolEvent } from './src/lib/hermesDirect.js';
 
 const VANTAGE_MCP_URL_FOR_DISPLAY = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
 const VANTAGE_BASE_URL = process.env.VANTAGE_BASE_URL || 'https://omokoda.duckdns.org';
@@ -87,6 +88,14 @@ const HERMES_CONTABO_GATEWAY_URL = process.env.HERMES_CONTABO_GATEWAY_URL || 'ht
 const HERMES_CONTABO_GATEWAY_KEY = process.env.HERMES_CONTABO_GATEWAY_KEY || '';
 const HERMES_GATEWAY_MODEL = process.env.HERMES_GATEWAY_MODEL || 'hermes-agent';
 const HERMES_GATEWAY_TIMEOUT_MS = 90_000;
+
+// ── Direct Hermes brain (SSH tunnel, hermesDirect.ts) ─────────────────────
+// When HERMES_DIRECT_URL is set (e.g. http://127.0.0.1:18642 via SSH tunnel),
+// the agent loop is reached directly with full session continuity, tools,
+// skills, and memory -- tried FIRST before the gateway session and Vantage relay.
+const HERMES_DIRECT_URL = process.env.HERMES_DIRECT_URL || '';
+const HERMES_DIRECT_KEY = process.env.HERMES_DIRECT_KEY || '';
+const HERMES_DIRECT_MODEL = process.env.HERMES_DIRECT_MODEL || 'hermes-agent';
 
 // ── Vantage memory vault (Vantage is the memory system) ────────────────────
 // The agent's vault lives on the Vantage platform; a scoped ingest-only
@@ -188,6 +197,7 @@ async function callHermesGatewaySession(
   }
 }
 
+
 /**
  * Calls a real external agent (Hermes or OpenClaw) through Vantage's own
  * /api/copilot/chat, authenticated as that agent via its own X-Agent-Key.
@@ -209,6 +219,95 @@ async function callVantageAgentBridge(agentKey: string, text: string): Promise<s
     throw new Error('Vantage copilot/chat returned no reply (agent bridge may be down or unconfigured)');
   }
   return reply;
+}
+
+/**
+ * Route one turn to a real agent brain. Prefers the DIRECT Hermes bridge
+ * (HERMES_DIRECT_URL set) for hermes/hermes_contabo frameworks -- that is a
+ * sessionful connection to the Fold 4 brain profile (this user's memory and
+ * skills, full tool/skill runtime). Falls back to the Vantage copilot relay
+ * when no direct URL is configured, preserving existing behavior.
+ */
+interface AgentTurnResult {
+  reply: string;
+  sessionId: string | null;
+  toolEvents: HermesToolEvent[];
+}
+async function bridgeAgentTurn(
+  backend: string,
+  text: string,
+  key: string,
+  sessionCtx: HermesSessionCtx,
+): Promise<AgentTurnResult> {
+  const directAvailable = HERMES_DIRECT_URL && HERMES_DIRECT_KEY;
+  if (directAvailable && (backend === 'hermes' || backend === 'hermes_contabo')) {
+    try {
+      const r = await bridgeToHermesDirect(sessionCtx, text, {
+        baseUrl: HERMES_DIRECT_URL,
+        apiKey: HERMES_DIRECT_KEY,
+        model: HERMES_DIRECT_MODEL,
+      });
+      return { reply: r.reply, sessionId: r.sessionId, toolEvents: r.toolEvents };
+    } catch (err: any) {
+      // Direct brain unreachable -- fall through to the Vantage relay rather
+      // than failing the turn.
+      console.warn(`[DirectBridge:${backend}] failed (${err?.message || err}), falling back to Vantage relay`);
+    }
+  }
+  const reply = await callVantageAgentBridge(key, text);
+  return { reply, sessionId: null, toolEvents: [] };
+}
+
+// ── Per-connection direct Hermes brain (the real agent, not a text echo) ──
+// Each WS connection gets ONE HermesStatefulClient backed by a persistent
+// gateway session (X-Hermes-Session-Key scopes long-term memory; the agent
+// keeps its own conversation history server-side). Long-term memory is the
+// Fold 4 default profile's — this user's MEMORY.md/USER.md, skills, tools
+// and subagent delegation all ride along on every turn.
+const directBrains = new WeakMap<WebSocket, HermesStatefulClient>();
+
+function getDirectBrain(ws: WebSocket): HermesStatefulClient | null {
+  if (!HERMES_DIRECT_URL || !HERMES_DIRECT_KEY) return null;
+  let brain = directBrains.get(ws);
+  if (!brain) {
+    brain = new HermesStatefulClient({
+      baseUrl: HERMES_DIRECT_URL,
+      apiKey: HERMES_DIRECT_KEY,
+      model: HERMES_DIRECT_MODEL,
+      sessionKey: mintHermesSessionKey('vv'),
+    });
+    directBrains.set(ws, brain);
+  }
+  return brain;
+}
+
+const VOICE_SYSTEM_MESSAGE =
+  'You are speaking through Vantage-Voice, a real-time voice interface. ' +
+  'You are the full Hermes agent — use your real tools, skills, memory and subagents ' +
+  'to actually do what is asked, not just talk about it. Respond naturally and ' +
+  'concisely for spoken voice; no markdown, no code fences.';
+
+/**
+ * Route one turn to the real agent brain via the per-connection stateful
+ * session. Returns the agent's reply, or null when the direct brain is not
+ * configured/unreachable (caller then falls back to the Vantage relay).
+ * Tool events are streamed to the client as tool_call transcripts so the
+ * UI shows the agent actually working.
+ */
+async function directAgentTurn(
+  backend: string,
+  text: string,
+  ws: WebSocket,
+  opts: { systemMessage?: string; onToolProgress?: (e: HermesToolEvent) => void } = {},
+): Promise<string | null> {
+  if (backend !== 'hermes' && backend !== 'hermes_contabo') return null;
+  const brain = getDirectBrain(ws);
+  if (!brain) return null;
+  const result = await brain.streamTurn(text, {
+    systemMessage: opts.systemMessage ?? VOICE_SYSTEM_MESSAGE,
+    onToolProgress: opts.onToolProgress,
+  });
+  return result.reply;
 }
 
 // Real, dedicated Gemini TTS model -- used to speak agent-bridge (Hermes/
@@ -405,6 +504,8 @@ const MANAGED_ENV_KEYS = [
   'VANTAGE_AGENT_KEY',
   'VANTAGE_MCP_URL',
   'VANTAGE_BASE_URL',
+  'HERMES_DIRECT_URL',
+  'HERMES_DIRECT_KEY',
 ];
 // OWNER_VOICE_PIN is deliberately excluded from MANAGED_ENV_KEYS -- the
 // agent must never be able to read, change, or clear its own access gate.
@@ -1356,24 +1457,41 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
     const key = backend === 'hermes' ? DEFAULT_HERMES_AGENT_KEY
       : backend === 'hermes_contabo' ? DEFAULT_HERMES_CONTABO_AGENT_KEY
       : DEFAULT_OPENCLAW_AGENT_KEY;
-    if (!key) return { status: 'error', message: `No agent key configured for ${backend}` };
     try {
       let reply: string;
+      let via: string;
+      // Priority: direct SSH brain → gateway session → Vantage relay
+      if ((backend === 'hermes' || backend === 'hermes_contabo') && HERMES_DIRECT_URL && HERMES_DIRECT_KEY) {
+        try {
+          const result = await oneShotHermesTurn(task, {
+            baseUrl: HERMES_DIRECT_URL,
+            apiKey: HERMES_DIRECT_KEY,
+            model: HERMES_DIRECT_MODEL,
+            systemMessage: VOICE_SYSTEM_MESSAGE,
+            sessionKeyPrefix: 'vv-delegate',
+          });
+          return { status: 'ok', backend, reply: result.reply, via: 'direct' };
+        } catch (err: any) {
+          console.warn(`[delegate_to_agent:${backend}] direct brain failed (${err?.message || err}), trying gateway`);
+        }
+      }
       if (backend === 'hermes_contabo' && HERMES_CONTABO_GATEWAY_KEY) {
         try {
-          // Each delegated task gets its own short-lived gateway session
-          // (not the caller's voice session) -- a real subagent hand-off,
-          // not a reuse of the parent conversation's memory.
           const delegateSessionKey = `vv_delegate_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
           reply = (await callHermesGatewaySession(delegateSessionKey, task)).reply;
+          via = 'gateway';
         } catch (err: any) {
           console.warn('[HermesGateway] delegate_to_agent falling back to Vantage relay:', err?.message || err);
+          if (!key) return { status: 'error', message: `No agent key configured for ${backend}` };
           reply = await callVantageAgentBridge(key, task);
+          via = 'vantage-relay';
         }
       } else {
+        if (!key) return { status: 'error', message: `No agent key configured for ${backend}` };
         reply = await callVantageAgentBridge(key, task);
+        via = 'vantage-relay';
       }
-      return { status: 'ok', backend, reply };
+      return { status: 'ok', backend, reply, via };
     } catch (err: any) {
       return { status: 'error', message: err?.message || String(err) };
     }
@@ -2721,6 +2839,24 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
                       }),
                     callBridge: async (backend, text) => {
                       if (backend === 'omokoda2') return bridgeToAgent(backend, '', text);
+                      // Real agent brain first (per-connection sessionful Hermes session with live tool events).
+                      const direct = await directAgentTurn(backend, text, clientWs, {
+                        onToolProgress: (e) => {
+                          sendToClient(clientWs, {
+                            type: 'tool_call',
+                            toolName: `${backend}:${e.tool}`,
+                            toolArgs: { status: e.status, detail: e.detail ?? '' },
+                          });
+                          sendToClient(clientWs, {
+                            type: 'transcript',
+                            sender: 'tool',
+                            toolName: `${backend}:${e.tool}`,
+                            text: `[${e.status}] ${e.tool}${e.detail ? ` — ${e.detail}` : ''}`,
+                            isFinal: true,
+                          });
+                        },
+                      });
+                      if (direct !== null) return direct;
                       const key = backend === 'hermes' ? activeHermesKey
                         : backend === 'hermes_contabo' ? activeHermesContaboKey
                         : activeOpenClawKey;
@@ -2768,9 +2904,40 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
                   activeFramework === 'hermes_contabo' ? activeHermesContaboKey :
                   activeFramework === 'open_claw' ? activeOpenClawKey :
                   '';
-                if (bridgeKey && utterance && liveSession) {
-                  bridgeToAgent(activeFramework, bridgeKey, utterance)
-                    .then(async (reply) => {
+                const directConfigured = Boolean(HERMES_DIRECT_URL && HERMES_DIRECT_KEY);
+                if ((bridgeKey || directConfigured) && utterance && liveSession) {
+                  (async () => {
+                    try {
+                      // Priority: direct SSH brain → Vantage relay
+                      let reply: string | null = null;
+                      if (directConfigured) {
+                        try {
+                          reply = await directAgentTurn(activeFramework, utterance, clientWs, {
+                            onToolProgress: (e) => {
+                              sendToClient(clientWs, {
+                                type: 'tool_call',
+                                toolName: `${activeFramework}:${e.tool}`,
+                                toolArgs: { status: e.status, detail: e.detail ?? '' },
+                              });
+                              sendToClient(clientWs, {
+                                type: 'transcript',
+                                sender: 'tool',
+                                toolName: `${activeFramework}:${e.tool}`,
+                                text: `[${e.status}] ${e.tool}${e.detail ? ` — ${e.detail}` : ''}`,
+                                isFinal: true,
+                              });
+                            },
+                          });
+                        } catch (err: any) {
+                          console.warn(`[AgentBridge:${activeFramework}] direct brain failed (${err?.message || err}), falling back to Vantage relay`);
+                        }
+                      }
+                      if ((reply === null || reply === '') && bridgeKey) {
+                        reply = await callVantageAgentBridge(bridgeKey, utterance);
+                      }
+                      if (reply === null || reply === '') {
+                        throw new Error('no reply from any agent brain');
+                      }
                       sendToClient(clientWs, {
                         type: 'transcript',
                         sender: 'tool',
@@ -2799,14 +2966,14 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
                           });
                         }
                       }
-                    })
-                    .catch((err: any) => {
+                    } catch (err: any) {
                       console.warn(`[AgentBridge:${activeFramework}] call failed:`, err?.message || err);
                       sendToClient(clientWs, {
                         type: 'error',
                         error: `${activeFramework} agent bridge failed: ${err?.message || err}`,
                       });
-                    });
+                    }
+                  })();
                 }
                 }
               }
