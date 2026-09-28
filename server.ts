@@ -364,7 +364,7 @@ async function generateTextDirect(systemPrompt: string, userPrompt: string): Pro
   if (!hasKey) throw new Error('No Gemini API key available for orchestrator text generation');
 
   const response = await client.models.generateContent({
-    model: 'gemini-3.1-flash-lite-preview',
+    model: 'gemini-2.5-flash-preview-05-20',
     contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
     config: { systemInstruction: systemPrompt },
   });
@@ -408,7 +408,7 @@ async function generateTextWithTools(systemPrompt: string, userPrompt: string, c
 
   for (let iteration = 0; iteration < ORCHESTRATOR_TOOL_LOOP_MAX_ITERATIONS; iteration++) {
     const response = await client.models.generateContent({
-      model: 'gemini-3.1-flash-lite-preview',
+      model: 'gemini-2.5-flash-preview-05-20',
       contents,
       config: { systemInstruction: systemPrompt, tools },
     });
@@ -1703,7 +1703,7 @@ app.post('/api/tts', async (req, res) => {
     }
 
     const response = await client.models.generateContent({
-      model: 'gemini-3.1-flash-tts-preview',
+      model: 'gemini-2.5-flash-preview-tts',
       contents: [{ parts: [{ text }] }],
       config: {
         responseModalities: [Modality.AUDIO],
@@ -1749,7 +1749,7 @@ ${conversationScript}
 Provide a comprehensive, accurate JSON response.`;
 
     if (hasKey) {
-      const modelsToTry = ['gemini-3.6-flash', 'gemini-flash-latest'];
+      const modelsToTry = ['gemini-2.0-flash-exp', 'gemini-2.5-flash-preview-05-20'];
       for (const modelName of modelsToTry) {
         try {
           const geminiRes = await client.models.generateContent({
@@ -2585,8 +2585,8 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
 
       const isTranslation = Boolean(config.translationMode);
       const targetModel = isTranslation
-        ? 'gemini-3.5-live-translate-preview'
-        : 'gemini-3.1-flash-live-preview';
+        ? 'gemini-live-2.5-flash-preview'
+        : 'gemini-live-2.5-flash-preview';
 
       const voiceName = config.voice || 'Zephyr';
       let systemInstruction = config.systemInstruction ||

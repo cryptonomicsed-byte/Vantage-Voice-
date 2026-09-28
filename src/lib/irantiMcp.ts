@@ -24,7 +24,7 @@ const IRANTI_MCP_CMD = process.env.IRANTI_MCP_CMD || 'node';
 const IRANTI_MCP_ARGS = process.env.IRANTI_MCP_ARGS
   ? process.env.IRANTI_MCP_ARGS.split(' ')
   : ['dist/index.js'];
-const IRANTI_MCP_CWD = process.env.IRANTI_MCP_CWD || '/Users/bino/iranti/mcp';
+const IRANTI_MCP_CWD = process.env.IRANTI_MCP_CWD || process.cwd();
 const CALL_TIMEOUT_MS = 20_000;
 const MAX_ARGS_BYTES = 50_000;
 
