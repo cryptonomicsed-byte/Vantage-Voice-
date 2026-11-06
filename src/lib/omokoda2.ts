@@ -57,16 +57,42 @@ let birthing: Promise<Omokoda2AgentState> | null = null;
  * birth; every subsequent request must present both via X-Agent-Id /
  * X-Agent-Key to be routed to this same guest.
  */
-async function ensureOmokoda2Agent(): Promise<Omokoda2AgentState> {
+export interface Omokoda2Options {
+  /** Kernel base URL override (per-connection). */
+  kernelUrl?: string;
+  /** Existing birth credentials (per-connection) — skip the guest birth. */
+  agentId?: string;
+  agentKey?: string;
+  /** Agent name override for a fresh guest birth. */
+  agentName?: string;
+}
+
+function kernelUrlFor(opts?: Omokoda2Options): string {
+  return (opts?.kernelUrl || OMOKODA2_KERNEL_URL).replace(/\/$/, '');
+}
+
+/**
+ * Births this app's Omo-Koda2 persona (or returns per-connection creds).
+ * A non-sovereign POST /v1/birth (no X-Agent-Id header) always creates a
+ * brand-new guest agent hosted in the kernel's guest pool — never touching
+ * the owner's sovereign identity.
+ */
+async function ensureOmokoda2Agent(opts?: Omokoda2Options): Promise<Omokoda2AgentState> {
+  // Per-connection credentials short-circuit the birth path entirely.
+  if (opts?.agentId && opts?.agentKey) {
+    return { agentId: opts.agentId, agentKey: opts.agentKey, bornAt: 'user-supplied' };
+  }
   const existing = loadAgentState();
-  if (existing) return existing;
+  if (existing && !opts?.kernelUrl && !opts?.agentName) return existing;
+  const kernelUrl = kernelUrlFor(opts);
+  const agentName = opts?.agentName || OMOKODA2_AGENT_NAME;
   if (!birthing) {
     birthing = (async () => {
-      const res = await fetch(`${OMOKODA2_KERNEL_URL.replace(/\/$/, '')}/v1/birth`, {
+      const res = await fetch(`${kernelUrl}/v1/birth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: OMOKODA2_AGENT_NAME,
+          name: agentName,
           meta: [{ key: 'source', value: 'vantage-voice' }],
         }),
       });
@@ -83,7 +109,7 @@ async function ensureOmokoda2Agent(): Promise<Omokoda2AgentState> {
         bornAt: new Date().toISOString(),
       };
       saveAgentState(state);
-      console.log(`[Omokoda2] birthed persona "${OMOKODA2_AGENT_NAME}" agent_id=${state.agentId}`);
+      console.log(`[Omokoda2] birthed persona "${agentName}" agent_id=${state.agentId}`);
       return state;
     })();
   }
@@ -102,12 +128,13 @@ async function ensureOmokoda2Agent(): Promise<Omokoda2AgentState> {
  * the reply text for a plain think call, per ExecutionResponse::from in
  * omokoda-core/src/server.rs.
  */
-export async function bridgeOmokoda2(text: string): Promise<string> {
-  const agent = await ensureOmokoda2Agent();
+export async function bridgeOmokoda2(text: string, opts?: Omokoda2Options): Promise<string> {
+  const agent = await ensureOmokoda2Agent(opts);
+  const kernelUrl = kernelUrlFor(opts);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OMOKODA2_THINK_TIMEOUT_MS);
   try {
-    const res = await fetch(`${OMOKODA2_KERNEL_URL.replace(/\/$/, '')}/v1/think`, {
+    const res = await fetch(`${kernelUrl}/v1/think`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -153,8 +180,9 @@ export interface GlyphMemoryQuery {
   relations?: string[];
 }
 
-export async function getOmokoda2GlyphMemory(query: GlyphMemoryQuery = {}): Promise<any> {
-  const agent = await ensureOmokoda2Agent();
+export async function getOmokoda2GlyphMemory(query: GlyphMemoryQuery = {}, opts?: Omokoda2Options): Promise<any> {
+  const agent = await ensureOmokoda2Agent(opts);
+  const kernelUrl = kernelUrlFor(opts);
   const params = new URLSearchParams();
   if (query.describe) params.set('describe', query.describe);
   if (query.walk) params.set('walk', query.walk);
@@ -163,7 +191,7 @@ export async function getOmokoda2GlyphMemory(query: GlyphMemoryQuery = {}): Prom
   if (query.relations?.length) params.set('relations', query.relations.join(','));
   const qs = params.toString();
   const res = await fetch(
-    `${OMOKODA2_KERNEL_URL.replace(/\/$/, '')}/v1/vault/glyph${qs ? `?${qs}` : ''}`,
+    `${kernelUrl}/v1/vault/glyph${qs ? `?${qs}` : ''}`,
     { headers: { 'X-Agent-Id': agent.agentId, 'X-Agent-Key': agent.agentKey } }
   );
   if (!res.ok) throw new Error(`Omo-Koda2 /v1/vault/glyph returned HTTP ${res.status}`);

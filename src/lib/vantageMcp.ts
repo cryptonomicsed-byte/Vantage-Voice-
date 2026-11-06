@@ -1,12 +1,13 @@
 /**
- * Real MCP client connecting this voice agent to Vantage's live MCP server.
+ * Real MCP client connecting voice turns to Vantage's live MCP server.
  *
- * Vantage exposes ~500+ real endpoints (trading, wallet, buzz, jobs, etc.)
- * as MCP tools via fastapi-mcp (see /opt/ares/Vantage/backend/mcp_server.py
- * on the Vantage side). This module connects to that server for real,
- * discovers its real tool list at startup, and executes real tool calls --
- * replacing the previous hardcoded template-string "MCP" stubs in
- * server.ts entirely.
+ * Multi-user: one client scope PER X-Agent-Key. Each scope owns its own
+ * transport, its own discovered tool list and its own name map, so a user's
+ * agent connection can only ever see and call the Vantage tools their key is
+ * authorized for. The module-level (no-suffix) functions below are the
+ * legacy single-key surface and delegate to the DEFAULT key (env
+ * VANTAGE_AGENT_KEY) — kept so existing call sites keep working; new code
+ * must use the *For(agentKey) variants.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -14,22 +15,15 @@ import type { FunctionDeclaration } from '@google/genai';
 import { Type } from '@google/genai';
 
 const VANTAGE_MCP_URL = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
-const VANTAGE_AGENT_KEY = process.env.VANTAGE_AGENT_KEY || '';
+const DEFAULT_AGENT_KEY = process.env.VANTAGE_AGENT_KEY || '';
 // A voice turn shouldn't hang on the MCP SDK's 60s default -- fail fast
 // enough that the caller can speak a real error instead of the user
 // sitting in silence.
 const CALL_TIMEOUT_MS = 20_000;
-// Defense against a malformed/runaway argument payload (e.g. the model
-// looping garbage into a tool call) -- reject before it ever reaches
-// Vantage rather than sending an oversized request.
+// Defense against a malformed/runaway argument payload.
 const MAX_ARGS_BYTES = 50_000;
-// Real concurrency cap: this module holds one MCP connection for the
-// whole process; without a cap, multi-agent orchestration or several
-// rapid tool calls could pile up requests faster than Vantage answers
-// them. Simple in-flight counter, not a queue -- excess calls fail fast
-// with a real "busy" error rather than silently stacking up.
+// Per-scope concurrency cap (in-flight counter, not a queue).
 const MAX_CONCURRENT_CALLS = 5;
-let inFlightCalls = 0;
 
 export interface VantageMcpTool {
   name: string;
@@ -37,132 +31,117 @@ export interface VantageMcpTool {
   inputSchema: any;
 }
 
-let client: Client | null = null;
-let connecting: Promise<Client> | null = null;
-let discoveredTools: VantageMcpTool[] = [];
+interface McpScope {
+  client: Client | null;
+  connecting: Promise<Client> | null;
+  tools: VantageMcpTool[];
+  nameMap: Map<string, string>; // gemini alias -> real tool name
+  inFlight: number;
+}
 
-/**
- * Real Vantage tool names collide with Gemini's function-name character
- * rules in a few places (dots, slashes) and can be long -- prefix + sanitize
- * so every declared function name is stable and unambiguous.
- */
+const scopes = new Map<string, McpScope>();
+
+function scopeFor(agentKey: string): McpScope {
+  let scope = scopes.get(agentKey);
+  if (!scope) {
+    scope = { client: null, connecting: null, tools: [], nameMap: new Map(), inFlight: 0 };
+    scopes.set(agentKey, scope);
+  }
+  return scope;
+}
+
+/** Vantage tool names -> Gemini function names (dots/slashes sanitized). */
 export function toGeminiFunctionName(vantageToolName: string): string {
   return `vantage__${vantageToolName}`.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 64);
 }
 
-const nameMap = new Map<string, string>(); // gemini name -> real vantage tool name
+async function connect(agentKey: string): Promise<Client> {
+  const scope = scopeFor(agentKey);
+  if (scope.client) return scope.client;
+  if (scope.connecting) return scope.connecting;
 
-async function connect(): Promise<Client> {
-  if (client) return client;
-  if (connecting) return connecting;
-
-  connecting = (async () => {
-    if (!VANTAGE_AGENT_KEY) {
-      throw new Error('VANTAGE_AGENT_KEY is not set -- cannot authenticate to Vantage MCP server');
+  scope.connecting = (async () => {
+    if (!agentKey) {
+      throw new Error('no Vantage X-Agent-Key for this connection -- cannot authenticate to Vantage MCP');
     }
     const transport = new StreamableHTTPClientTransport(new URL(VANTAGE_MCP_URL), {
-      requestInit: {
-        headers: { 'X-Agent-Key': VANTAGE_AGENT_KEY },
-      },
+      requestInit: { headers: { 'X-Agent-Key': agentKey } },
     });
     const c = new Client({ name: 'vantage-voice', version: '1.0.0' }, { capabilities: {} });
     await c.connect(transport);
-    client = c;
-    console.log(`[VantageMCP] connected to ${VANTAGE_MCP_URL}`);
+    scope.client = c;
+    console.log(`[VantageMCP] connected scope for key ...${agentKey.slice(-4)} (${scopes.size} scopes)`);
     return c;
   })();
 
   try {
-    return await connecting;
+    return await scope.connecting;
   } finally {
-    connecting = null;
+    scope.connecting = null;
   }
 }
 
-/**
- * Connects and discovers Vantage's real tool list. Called once at server
- * startup; failures are logged, not thrown, so a Vantage outage degrades
- * this feature instead of crashing the whole voice server.
- */
-export async function initVantageMcp(): Promise<VantageMcpTool[]> {
+/** Discover Vantage's real tool list for one key. Failures log, never throw. */
+export async function initVantageMcpFor(agentKey: string): Promise<VantageMcpTool[]> {
+  const scope = scopeFor(agentKey);
   try {
-    const c = await connect();
+    const c = await connect(agentKey);
     const result = await c.listTools(undefined, { timeout: CALL_TIMEOUT_MS });
-    discoveredTools = result.tools.map((t) => ({
+    scope.tools = result.tools.map((t) => ({
       name: t.name,
       description: t.description || '',
       inputSchema: t.inputSchema,
     }));
-    nameMap.clear();
-    for (const t of discoveredTools) {
-      nameMap.set(toGeminiFunctionName(t.name), t.name);
-    }
-    console.log(`[VantageMCP] discovered ${discoveredTools.length} real tools from Vantage`);
-    return discoveredTools;
+    scope.nameMap.clear();
+    for (const t of scope.tools) scope.nameMap.set(toGeminiFunctionName(t.name), t.name);
+    console.log(`[VantageMCP] key ...${agentKey.slice(-4)}: discovered ${scope.tools.length} tools`);
+    return scope.tools;
   } catch (err: any) {
-    console.warn('[VantageMCP] discovery failed (voice will run without live Vantage tools):', err?.message || err);
-    discoveredTools = [];
+    console.warn(`[VantageMCP] discovery failed for key ...${agentKey.slice(-4)}:`, err?.message || err);
+    scope.tools = [];
     return [];
   }
 }
 
-export function getDiscoveredTools(): VantageMcpTool[] {
-  return discoveredTools;
+export function getToolsFor(agentKey: string): VantageMcpTool[] {
+  return scopeFor(agentKey).tools;
 }
 
-export function isVantageToolName(geminiFunctionName: string): boolean {
-  return nameMap.has(geminiFunctionName);
+export function isVantageToolNameFor(agentKey: string, geminiFunctionName: string): boolean {
+  return scopeFor(agentKey).nameMap.has(geminiFunctionName);
 }
 
-/**
- * Vantage tools that move money or mint credentials.
- *
- * These arrive over MCP and were dispatched with no gate at all — the owner PIN
- * only ever covered this app's own local tools — so a spoken sentence could
- * place a real order or generate a wallet. Since tool arguments derive from
- * whatever was said near a live microphone, that is reachable by prompt
- * injection as well as by whoever is in the room.
- *
- * Matched on the underlying Vantage tool name rather than the Gemini alias, and
- * deliberately by intent (verbs that spend or sign) rather than by an
- * enumerated list, which would silently miss every endpoint added later.
- */
-/** Test seam: the real map is populated by connecting to Vantage's MCP server. */
-export function __setNameMapForTests(map: Map<string, string>): void {
-  nameMap.clear();
-  for (const [alias, real] of map) nameMap.set(alias, real);
+export function disconnectScope(agentKey: string): void {
+  const scope = scopes.get(agentKey);
+  if (!scope) return;
+  scope.client?.close().catch(() => {});
+  scopes.delete(agentKey);
 }
+
+// ── money-moving gate (per scope, name-map aware) ──────────────────────────
 
 const MONEY_MOVING = [
   /order/i, /trade/i, /trading/i, /wallet/i, /execute/i,
   /withdraw/i, /transfer/i, /swap/i, /buy/i, /sell/i, /sign/i,
 ];
-
 const READ_ONLY_VERBS = /^(get|list|read|show|fetch|search|status)/i;
 
-export function isMoneyMovingVantageTool(geminiFunctionName: string): boolean {
-  const real = nameMap.get(geminiFunctionName);
+export function isMoneyMovingVantageToolFor(agentKey: string, geminiFunctionName: string): boolean {
+  const real = scopeFor(agentKey).nameMap.get(geminiFunctionName);
   if (!real) return false;
-  // Reading an order back is not spending. Gating reads too would push people
-  // to unlock for everything, which defeats the gate.
   if (READ_ONLY_VERBS.test(real)) return false;
-  return MONEY_MOVING.some((pattern) => pattern.test(real));
+  return MONEY_MOVING.some((p) => p.test(real));
 }
 
-/** Best-effort JSON Schema -> Gemini Type mapping for the handful of shapes fastapi-mcp actually emits. */
+// ── schema -> Gemini declarations (per key) ────────────────────────────────
+
 function mapSchemaType(jsonType: string | undefined): Type {
   switch (jsonType) {
-    case 'integer':
-    case 'number':
-      return Type.NUMBER;
-    case 'boolean':
-      return Type.BOOLEAN;
-    case 'object':
-      return Type.OBJECT;
-    case 'array':
-      return Type.ARRAY;
-    default:
-      return Type.STRING;
+    case 'integer': case 'number': return Type.NUMBER;
+    case 'boolean': return Type.BOOLEAN;
+    case 'object': return Type.OBJECT;
+    case 'array': return Type.ARRAY;
+    default: return Type.STRING;
   }
 }
 
@@ -171,19 +150,7 @@ function convertProperties(schema: any): Record<string, any> {
   const out: Record<string, any> = {};
   for (const [key, val] of Object.entries<any>(props)) {
     const type = mapSchemaType(val?.type);
-    const converted: any = {
-      type,
-      description: val?.description || val?.title || key,
-    };
-    // Gemini's Live API rejects the ENTIRE session setup (all tools, not
-    // just this one) if any ARRAY property lacks `items` -- found live via
-    // real "processing conversation turn" hangs: the WS session was
-    // actually being killed at connect time with a 1007 schema error
-    // ("properties[tool_slugs].items: missing field") from a real Vantage
-    // tool's array param, so no turn -- not even the first one -- could
-    // ever complete. Real Vantage/fastapi-mcp array schemas sometimes omit
-    // `items` too (e.g. an untyped List[str]), so default to STRING items
-    // rather than dropping the property or crashing the declaration build.
+    const converted: any = { type, description: val?.description || val?.title || key };
     if (type === Type.ARRAY) {
       converted.items = val?.items
         ? { type: mapSchemaType(val.items.type), description: val.items.description || '' }
@@ -194,76 +161,53 @@ function convertProperties(schema: any): Record<string, any> {
   return out;
 }
 
-/**
- * Builds real Gemini FunctionDeclarations from Vantage's real discovered
- * MCP tools -- these get merged into server.ts's `liveTools` alongside the
- * (still-present) generic/demo tools, so the model can call real Vantage
- * capabilities directly by name instead of through an indirect meta-tool.
- */
-export function buildGeminiDeclarationsForVantageTools(): FunctionDeclaration[] {
-  return discoveredTools.map((t) => {
+export function buildDeclarationsFor(agentKey: string): FunctionDeclaration[] {
+  return scopeFor(agentKey).tools.map((t) => {
     const properties = convertProperties(t.inputSchema);
     const required = Array.isArray(t.inputSchema?.required) ? t.inputSchema.required : [];
     return {
       name: toGeminiFunctionName(t.name),
       description: `[Vantage] ${t.description}`.slice(0, 1000),
-      parameters: {
-        type: Type.OBJECT,
-        properties,
-        required,
-      },
+      parameters: { type: Type.OBJECT, properties, required },
     } as FunctionDeclaration;
   });
 }
 
-/**
- * Executes a real Vantage MCP tool call by its Gemini-declared name.
- * Returns the real tool result content (or throws with a real error
- * message) -- no template strings, no simulated success.
- *
- * If Vantage's own backend restarts, the streamable-HTTP session this
- * client was holding becomes invalid server-side ("No valid session ID
- * provided") even though the client object itself still looks connected
- * -- found live during a real audit of this path. Detected here and
- * retried once with a fresh connection rather than failing until the
- * whole voice server is manually restarted.
- */
-export async function callVantageTool(geminiFunctionName: string, args: Record<string, any>): Promise<any> {
-  const realName = nameMap.get(geminiFunctionName);
-  if (!realName) {
-    throw new Error(`Unknown Vantage MCP tool: ${geminiFunctionName}`);
-  }
+/** Execute one Vantage tool for one key. Real result or a real error. */
+export async function callVantageToolFor(
+  agentKey: string,
+  geminiFunctionName: string,
+  args: Record<string, any>,
+): Promise<any> {
+  const scope = scopeFor(agentKey);
+  const realName = scope.nameMap.get(geminiFunctionName);
+  if (!realName) throw new Error(`Unknown Vantage MCP tool: ${geminiFunctionName}`);
   if (!args || typeof args !== 'object' || Array.isArray(args)) {
     throw new Error('Tool arguments must be a plain object');
   }
-  const argsSize = JSON.stringify(args).length;
-  if (argsSize > MAX_ARGS_BYTES) {
-    throw new Error(`Tool arguments too large (${argsSize} bytes, max ${MAX_ARGS_BYTES})`);
+  if (JSON.stringify(args).length > MAX_ARGS_BYTES) {
+    throw new Error(`Tool arguments too large (max ${MAX_ARGS_BYTES} bytes)`);
   }
-
-  if (inFlightCalls >= MAX_CONCURRENT_CALLS) {
-    throw new Error(`Vantage MCP is busy (${inFlightCalls} calls already in flight) -- try again in a moment`);
+  if (scope.inFlight >= MAX_CONCURRENT_CALLS) {
+    throw new Error(`Vantage MCP is busy (${scope.inFlight} calls already in flight)`);
   }
 
   const attempt = async () => {
-    const c = await connect();
+    const c = await connect(agentKey);
     return c.callTool({ name: realName, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS });
   };
 
-  inFlightCalls++;
+  scope.inFlight++;
   let result;
   try {
     try {
       result = await attempt();
     } catch (err: any) {
       const msg = err?.message || String(err);
-      // Retry once for a stale session (server restarted -- see prior
-      // fix) or a transient network blip. Anything else (a real tool
-      // error, a real 4xx) is not worth retrying and surfaces immediately.
       const isRetryable = /session|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up/i.test(msg);
       if (isRetryable) {
-        console.warn(`[VantageMCP] retryable error, reconnecting and retrying once ('${realName}'):`, msg);
-        client = null;
+        console.warn(`[VantageMCP] retryable error, reconnecting scope and retrying once ('${realName}'):`, msg);
+        scope.client = null;
         await new Promise((r) => setTimeout(r, 300));
         result = await attempt();
       } else {
@@ -271,7 +215,7 @@ export async function callVantageTool(geminiFunctionName: string, args: Record<s
       }
     }
   } finally {
-    inFlightCalls--;
+    scope.inFlight--;
   }
 
   if (result.isError) {
@@ -281,4 +225,32 @@ export async function callVantageTool(geminiFunctionName: string, args: Record<s
     throw new Error(`Vantage tool '${realName}' returned an error: ${errText}`);
   }
   return result.content;
+}
+
+// ── legacy single-key surface (delegates to DEFAULT_AGENT_KEY) ─────────────
+
+export async function initVantageMcp(): Promise<VantageMcpTool[]> {
+  return initVantageMcpFor(DEFAULT_AGENT_KEY);
+}
+export function getDiscoveredTools(): VantageMcpTool[] {
+  return getToolsFor(DEFAULT_AGENT_KEY);
+}
+export function isVantageToolName(geminiFunctionName: string): boolean {
+  return isVantageToolNameFor(DEFAULT_AGENT_KEY, geminiFunctionName);
+}
+export function buildGeminiDeclarationsForVantageTools(): FunctionDeclaration[] {
+  return buildDeclarationsFor(DEFAULT_AGENT_KEY);
+}
+export function callVantageTool(geminiFunctionName: string, args: Record<string, any>): Promise<any> {
+  return callVantageToolFor(DEFAULT_AGENT_KEY, geminiFunctionName, args);
+}
+export function isMoneyMovingVantageTool(geminiFunctionName: string): boolean {
+  return isMoneyMovingVantageToolFor(DEFAULT_AGENT_KEY, geminiFunctionName);
+}
+
+/** Test seam. */
+export function __setNameMapForTests(map: Map<string, string>): void {
+  const scope = scopeFor(DEFAULT_AGENT_KEY);
+  scope.nameMap.clear();
+  for (const [alias, real] of map) scope.nameMap.set(alias, real);
 }

@@ -58,7 +58,18 @@ It enables fluid, low-latency voice conversations where users speak into their m
 
 ---
 
-## ✨ Features
+## Agent connections (citizen / visitor)
+
+Vantage Voice is a **neutral voice front-end for any agent framework**. Omokoda-agent (via the Omokoda2 kernel) is the **native citizen** — voice turns flow through its control kernel and receipt system. **Hermes, OpenClaw, and any OpenAI-compatible endpoint are visitors** — you connect your own instance (gateway URL + key) and it gets full, authenticated access to **your** Vantage account through your own `X-Agent-Key`.
+
+- **Settings → "Connect Your Agent"**: add Omokoda-agent (kernel URL + birth creds), Hermes (gateway URL + API key), OpenClaw (endpoint + key), a generic OpenAI-compatible endpoint (base URL + key + model), or the native Vantage Copilot fallback. Each connection carries its own Vantage `X-Agent-Key` (live MCP tools for that account) and vault connector key (turns land in that account's memory vault).
+- **Encrypted per-user storage**: credentials are AES-256-GCM encrypted under `data/connections/<userId>.json` (master key via `VV_CREDENTIAL_MASTER_KEY` or auto-generated `data/.vv-master.key`). Secrets are never returned by the API and never become global env defaults in multi-user mode.
+- **Test + switch live**: the Test button probes the endpoint and lists its tools/MCP servers; activating a connection switches the voice session to that agent (mid-session reconfig included).
+- **Money-moving actions stay gated**: the owner PIN + explicit confirmation system applies to every connected agent, not just native.
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full voice → agent → Vantage MCP → vault flow.
+
+## Features
 
 - **Bidirectional Audio Streaming**: Continuous 16kHz PCM input capture and gapless 24kHz PCM output playback.
 - **Voice Activity Detection (VAD)**: Real-time volume RMS calculation with customizable sensitivity thresholds and automatic silence detection.

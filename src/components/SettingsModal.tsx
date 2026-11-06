@@ -3,8 +3,9 @@ import { AppSettings, VoiceName, AgentFramework } from '../types';
 import { AVAILABLE_VOICES, SYSTEM_PERSONAS, TRANSLATION_LANGUAGES } from '../lib/constants';
 import { X, Sparkles, Volume2, Sliders, Globe, Wrench, Shield, Check, Mic, Bot, Terminal, FileText, Cpu, Brain, ShieldCheck, Key, ExternalLink } from 'lucide-react';
 import type { OAuthAccount } from './OAuthIntegrationsModal';
+import { ConnectAgentPanel } from './ConnectAgentPanel';
 
-type SettingsTab = 'persona' | 'voice' | 'agent' | 'oauth' | 'translation' | 'audio';
+type SettingsTab = 'persona' | 'voice' | 'agent' | 'connect' | 'oauth' | 'translation' | 'audio';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -111,6 +112,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           >
             <Bot className="w-4 h-4 text-emerald-500" />
             Agent & Tools
+          </button>
+          <button
+            onClick={() => setActiveTab('connect')}
+            className={`py-3 text-xs sm:text-sm font-semibold border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              activeTab === 'connect'
+                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
+            }`}
+          >
+            <ExternalLink className="w-4 h-4 text-violet-500" />
+            Connect Your Agent
           </button>
           <button
             onClick={() => setActiveTab('oauth')}
@@ -690,6 +702,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           )}
 
           {/* TAB: OAuth & Connected Accounts */}
+          {activeTab === 'connect' && (
+            <div className="overflow-y-auto">
+              <ConnectAgentPanel />
+            </div>
+          )}
+
           {activeTab === 'oauth' && (
             <div className="space-y-4">
               <div className="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-start gap-3">

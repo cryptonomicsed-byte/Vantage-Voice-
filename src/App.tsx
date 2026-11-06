@@ -564,6 +564,8 @@ export default function App() {
             targetLanguageCode: settings.targetLanguageCode,
             enableTools: settings.enableTools,
             agentFramework: settings.agentFramework,
+            userId: localStorage.getItem('vantage_agent_name') || 'local-owner',
+            connectionId: localStorage.getItem('vv_connection_id') || null,
             hermesAgentKey: settings.hermesAgentKey,
             hermesContaboAgentKey: settings.hermesContaboAgentKey,
             openClawAgentKey: settings.openClawAgentKey,
@@ -650,6 +652,8 @@ export default function App() {
                           targetLanguageCode: langDetection.detectedCode,
                           enableTools: prev.enableTools,
                           agentFramework: prev.agentFramework,
+                      userId: localStorage.getItem('vantage_agent_name') || 'local-owner',
+                      connectionId: localStorage.getItem('vv_connection_id') || null,
                           hermesAgentKey: prev.hermesAgentKey,
                           hermesContaboAgentKey: prev.hermesContaboAgentKey,
                           openClawAgentKey: prev.openClawAgentKey,
@@ -821,6 +825,8 @@ export default function App() {
                       targetLanguageCode: prev.targetLanguageCode,
                       enableTools: prev.enableTools,
                       agentFramework: prev.agentFramework,
+                      userId: localStorage.getItem('vantage_agent_name') || 'local-owner',
+                      connectionId: localStorage.getItem('vv_connection_id') || null,
                       hermesAgentKey: prev.hermesAgentKey,
                       hermesContaboAgentKey: prev.hermesContaboAgentKey,
                       openClawAgentKey: prev.openClawAgentKey,
@@ -970,6 +976,8 @@ export default function App() {
           body: JSON.stringify({
             transcripts,
             agentFramework: settings.agentFramework,
+            userId: localStorage.getItem('vantage_agent_name') || 'local-owner',
+            connectionId: localStorage.getItem('vv_connection_id') || null,
           }),
         });
 

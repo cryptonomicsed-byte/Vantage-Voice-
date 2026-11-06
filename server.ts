@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
 import express from 'express';
 import http from 'http';
 import path from 'path';
@@ -55,6 +56,16 @@ import {
   type VoiceSessionHandle,
 } from './src/lib/vantageVoiceSession.js';
 import { bridgeToHermesDirect, mintHermesSessionKey, oneShotHermesTurn, HermesStatefulClient, type HermesSessionCtx, type HermesToolEvent } from './src/lib/hermesDirect.js';
+import {
+  listConnections, getConnection, getActiveConnection, saveConnection,
+  deleteConnection as deleteAgentConnection, setActiveConnection, testConnection,
+  type AgentConnection, type AgentConnectionConfig,
+} from './src/lib/agentConnections.js';
+import { OpenAiCompatClient } from './src/lib/openAiCompat.js';
+import {
+  initVantageMcpFor, buildDeclarationsFor, callVantageToolFor,
+  isMoneyMovingVantageToolFor, isVantageToolNameFor, getToolsFor,
+} from './src/lib/vantageMcp.js';
 
 const VANTAGE_MCP_URL_FOR_DISPLAY = process.env.VANTAGE_MCP_URL || 'https://omokoda.duckdns.org/mcp';
 const VANTAGE_BASE_URL = process.env.VANTAGE_BASE_URL || 'https://omokoda.duckdns.org';
@@ -112,9 +123,10 @@ const VVAULT_CONNECTOR_KEY = process.env.VVAULT_CONNECTOR_KEY || '';
 async function offloadTurnToVault(
   conversationId: string,
   userText: string,
-  assistantText: string
+  assistantText: string,
+  connectorKey: string = VVAULT_CONNECTOR_KEY
 ): Promise<void> {
-  if (!VVAULT_CONNECTOR_KEY) return;
+  if (!connectorKey) return;
   try {
     const body = JSON.stringify({
       conversation_id: conversationId.slice(0, 16),
@@ -129,7 +141,7 @@ async function offloadTurnToVault(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Vault-Connector-Key': VVAULT_CONNECTOR_KEY,
+        'X-Vault-Connector-Key': connectorKey,
       },
       body,
     });
@@ -397,7 +409,7 @@ async function generateTextWithTools(systemPrompt: string, userPrompt: string, c
     {
       functionDeclarations: [
         ...liveTools[0].functionDeclarations,
-        ...buildGeminiDeclarationsForVantageTools(),
+        ...buildDeclarationsFor(ctx.vantageAgentKey || process.env.VANTAGE_AGENT_KEY || ''),
         ...buildGeminiDeclarationsForComposioTools(),
         ...buildGeminiDeclarationsForIrantiTools(),
       ],
@@ -989,21 +1001,23 @@ interface ToolCtx {
   unlockOwner: () => void;
   applySettingOnClient?: (setting: string, value: string) => void;
   applyRosterChange?: (action: 'add' | 'remove', backend: string, voice?: string) => void;
+  /** Per-connection Vantage X-Agent-Key (defaults to env key when absent). */
+  vantageAgentKey?: string;
 }
 
 async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
   console.log(`[Tool Call] Executing tool '${name}' with args:`, args);
 
-  // Real, first-class Vantage MCP tools (vantage__<realname>) -- these are
-  // dynamically discovered from Vantage's live MCP server at startup (see
-  // initVantageMcp() / buildGeminiDeclarationsForVantageTools()), not
-  // hardcoded. Route them to the real MCP client before falling through
+  // Real, first-class Vantage MCP tools (vantage__<realname>) — dynamically
+  // discovered per X-Agent-Key (see initVantageMcpFor / buildDeclarationsFor).
+  // Route them to the per-connection MCP client scope before falling through
   // to the static demo tool handlers below.
-  if (isVantageToolName(name)) {
+  const mcpKey = ctx.vantageAgentKey || process.env.VANTAGE_AGENT_KEY || '';
+  if (isVantageToolNameFor(mcpKey, name)) {
     // Money-moving Vantage tools sit behind the same owner unlock as this
     // app's local privileged tools. They were previously dispatched ungated,
     // so a spoken sentence could place a real order or mint a wallet.
-    if (isMoneyMovingVantageTool(name) && !ctx.ownerUnlocked) {
+    if (isMoneyMovingVantageToolFor(mcpKey, name) && !ctx.ownerUnlocked) {
       auditOwnerAction('vantage_money_tool_blocked', { tool: name }, 'denied');
       return {
         status: 'owner_unlock_required',
@@ -1011,8 +1025,8 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
       };
     }
     try {
-      const content = await callVantageTool(name, args);
-      if (isMoneyMovingVantageTool(name)) {
+      const content = await callVantageToolFor(mcpKey, name, args);
+      if (isMoneyMovingVantageToolFor(mcpKey, name)) {
         auditOwnerAction('vantage_money_tool', { tool: name });
       }
       return { status: 'ok', source: 'vantage_mcp_live', content };
@@ -1149,8 +1163,13 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
 
     const action = args.action || 'list_tools';
     const displayName = isIrantiTarget ? 'Ìrántí (local stdio)' : VANTAGE_MCP_URL_FOR_DISPLAY;
-    const listDecls = isIrantiTarget ? buildGeminiDeclarationsForIrantiTools : buildGeminiDeclarationsForVantageTools;
-    const callFn = isIrantiTarget ? callIrantiTool : callVantageTool;
+    const mcpKey = ctx.vantageAgentKey || process.env.VANTAGE_AGENT_KEY || '';
+    const listDecls = isIrantiTarget
+      ? buildGeminiDeclarationsForIrantiTools
+      : () => buildDeclarationsFor(mcpKey);
+    const callFn = isIrantiTarget
+      ? callIrantiTool
+      : (name: string, args: any) => callVantageToolFor(mcpKey, name, args);
 
     if (action === 'list_tools') {
       const tools = listDecls();
@@ -1523,6 +1542,126 @@ async function executeToolCall(name: string, args: any, ctx: ToolCtx) {
 }
 
 // REST API Endpoints
+// ── Per-user agent connections (citizen / visitor model) ────────────────────
+// A logged-in user connects their own agent (Omokoda-agent, Hermes, OpenClaw,
+// or any OpenAI-compatible endpoint) with their own credentials and their own
+// Vantage X-Agent-Key. Everything is stored per-user, encrypted at rest.
+// Identity: x-user-id header (the browser sends the Vantage user/agent id);
+// falls back to 'local-owner' for the single-user deployment.
+
+function connectionUserId(req: express.Request): string {
+  const raw = String(req.header('x-user-id') || req.header('x-agent-id') || 'local-owner').trim();
+  return raw.replace(/[^a-zA-Z0-9._@-]/g, '_').slice(0, 96) || 'local-owner';
+}
+
+app.get('/api/connections', (req, res) => {
+  try {
+    res.json({ ok: true, connections: listConnections(connectionUserId(req)) });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/connections', express.json(), (req, res) => {
+  try {
+    const userId = connectionUserId(req);
+    const { kind, label, config = {} } = req.body || {};
+    if (!kind || !['native', 'omokoda2', 'hermes', 'openclaw', 'openai'].includes(kind)) {
+      return res.status(400).json({ ok: false, error: 'kind must be native|omokoda2|hermes|openclaw|openai' });
+    }
+    const id = `c_${String(kind).slice(0, 6)}_${crypto.randomUUID().slice(0, 8)}`;
+    const conn = saveConnection(userId, {
+      id,
+      userId,
+      kind: kind as any,
+      label: String(label || `${kind} agent`).slice(0, 120),
+      active: listConnections(userId).length === 0,
+      config: sanitizeConnectionConfig(kind, config),
+    });
+    console.log(`[AgentConnections] created ${id} (${kind}) for user ${userId}`);
+    res.json({ ok: true, connection: conn });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
+
+/** Keep only the fields this connection kind understands. */
+function sanitizeConnectionConfig(kind: string, raw: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  const str = (v: any) => (typeof v === 'string' ? v.trim() : '');
+  switch (kind) {
+    case 'omokoda2':
+      out.kernelUrl = str(raw.kernelUrl); out.agentName = str(raw.agentName);
+      out.agentId = str(raw.agentId); out.agentKey = str(raw.agentKey);
+      break;
+    case 'hermes':
+      out.gatewayUrl = str(raw.gatewayUrl); out.apiKey = str(raw.apiKey); out.model = str(raw.model);
+      break;
+    case 'openclaw':
+      out.endpoint = str(raw.endpoint); out.openclawKey = str(raw.openclawKey);
+      break;
+    case 'openai':
+      out.baseUrl = str(raw.baseUrl); out.openaiKey = str(raw.openaiKey); out.openaiModel = str(raw.openaiModel);
+      break;
+    default:
+      break;
+  }
+  // Vantage account binding is common to every kind.
+  out.vantageAgentKey = str(raw.vantageAgentKey);
+  out.vantageBaseUrl = str(raw.vantageBaseUrl);
+  out.vaultConnectorKey = str(raw.vaultConnectorKey);
+  return out;
+}
+
+app.put('/api/connections/:id', express.json(), (req, res) => {
+  try {
+    const userId = connectionUserId(req);
+    const existing = getConnection(userId, req.params.id);
+    if (!existing) return res.status(404).json({ ok: false, error: 'connection not found' });
+    const body = req.body || {};
+    const conn = saveConnection(userId, {
+      id: existing.id,
+      userId,
+      kind: existing.kind,
+      label: String(body.label || existing.label).slice(0, 120),
+      active: body.active === true ? true : existing.active,
+      config: sanitizeConnectionConfig(existing.kind, { ...existing.config, ...(body.config || {}) }),
+    });
+    res.json({ ok: true, connection: conn });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
+
+app.delete('/api/connections/:id', (req, res) => {
+  try {
+    const ok = deleteAgentConnection(connectionUserId(req), req.params.id);
+    if (!ok) return res.status(404).json({ ok: false, error: 'connection not found' });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/connections/:id/activate', (req, res) => {
+  try {
+    const conn = setActiveConnection(connectionUserId(req), req.params.id);
+    if (!conn) return res.status(404).json({ ok: false, error: 'connection not found' });
+    res.json({ ok: true, connection: conn });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/connections/:id/test', async (req, res) => {
+  try {
+    const result = await testConnection(connectionUserId(req), req.params.id);
+    res.json({ ...result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, message: err?.message || String(err) });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   const { hasKey } = getAiClient();
   res.json({
@@ -2414,6 +2553,83 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
   let activeHermesKey = '';
   let activeHermesContaboKey = '';
   let activeOpenClawKey = '';
+  // ── Per-user agent connection (citizen/visitor model) ──────────────────────
+  let activeConnection: AgentConnection | null = null;
+  let activeVantageKey = process.env.VANTAGE_AGENT_KEY || '';
+  let activeVaultKey = process.env.VVAULT_CONNECTOR_KEY || '';
+  let activeOmokoda2Cfg: AgentConnectionConfig | null = null;
+  let activeHermesGateway: { url: string; key: string; model: string } | null = null;
+  let activeOpenAiCompat: { baseUrl: string; apiKey: string; model: string } | null = null;
+
+  /** Map a connection kind to the voice backend name used across this file. */
+  function backendForConnection(kind: string): string {
+    switch (kind) {
+      case 'omokoda2': return 'omokoda2';
+      case 'hermes': return 'hermes_contabo'; // sessionful gateway path
+      case 'openclaw': return 'open_claw';
+      case 'openai': return 'openai';
+      default: return 'native';
+    }
+  }
+
+  /**
+   * Resolve this session's agent from the client config: an explicit
+   * connectionId, else the user's active connection, else server-wide env
+   * defaults (legacy single-user path). One user's agent can never see
+   * another user's credentials — everything is loaded from the per-user
+   * encrypted store keyed by the userId the browser supplies.
+   */
+  function applyConnectionConfig(config: Record<string, any>): void {
+    const userId = String(config.userId || 'local-owner');
+    const conn = config.connectionId
+      ? getConnection(userId, String(config.connectionId))
+      : getActiveConnection(userId);
+    activeConnection = conn;
+    activeVantageKey = conn?.config.vantageAgentKey || process.env.VANTAGE_AGENT_KEY || '';
+    activeVaultKey = conn?.config.vaultConnectorKey || process.env.VVAULT_CONNECTOR_KEY || '';
+    activeOmokoda2Cfg = conn?.kind === 'omokoda2' ? conn.config : null;
+    activeHermesGateway = conn?.kind === 'hermes'
+      ? {
+          url: conn.config.gatewayUrl || HERMES_CONTABO_GATEWAY_URL,
+          key: conn.config.apiKey || HERMES_CONTABO_GATEWAY_KEY,
+          model: conn.config.model || HERMES_GATEWAY_MODEL,
+        }
+      : null;
+    activeOpenAiCompat = conn?.kind === 'openai'
+      ? {
+          baseUrl: conn.config.baseUrl || '',
+          apiKey: conn.config.openaiKey || '',
+          model: conn.config.openaiModel || 'gpt-4o-mini',
+        }
+      : conn?.kind === 'openclaw'
+        ? {
+            baseUrl: conn.config.endpoint || '',
+            apiKey: conn.config.openclawKey || '',
+            model: 'openclaw',
+          }
+        : null;
+    if (activeVantageKey && activeVantageKey !== (process.env.VANTAGE_AGENT_KEY || '')) {
+      // Discover this connection's own Vantage tool scope in the background.
+      void initVantageMcpFor(activeVantageKey);
+    }
+    if (conn) {
+      console.log(`[AgentConnections] session agent: kind=${conn.kind} id=${conn.id} label=${conn.label} user=${userId}`);
+    } else {
+      console.log(`[AgentConnections] session agent: server defaults (env) — user=${userId}`);
+    }
+  }
+
+  /** Vantage tools as OpenAI function definitions (for generic endpoints). */
+  function vantageOpenAiTools(): Array<Record<string, unknown>> {
+    return getToolsFor(activeVantageKey).map((t) => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: String(t.description || '').slice(0, 1024),
+        parameters: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : { type: 'object', properties: {} },
+      },
+    }));
+  }
   let ownerUnlocked = false; // per-connection only, never persisted, resets every new session
   let multiAgentEnabled = false;
   let roster: RosterMember[] = [];
@@ -2436,14 +2652,20 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
   let vantageSessionOpening: Promise<void> | null = null;
 
   async function ensureVantageVoiceSession(): Promise<void> {
-    if (vantageVoiceSession || !isVantageVoiceSessionConfigured()) return;
+    if (vantageVoiceSession || !(activeVantageKey || process.env.VANTAGE_AGENT_KEY)) return;
     if (!vantageSessionOpening) {
       vantageSessionOpening = (async () => {
         vantageVoiceSession = await openVoiceSession({
           engine: cascadeActive ? 'cascade' : 'gemini_live',
           framework: activeFramework,
           voice: voiceNameForOrchestrator,
-          metadata: { hermes_gateway_session: hermesGatewaySessionKey },
+          agentKey: activeVantageKey || undefined,
+          metadata: {
+            hermes_gateway_session: hermesGatewaySessionKey,
+            agent_connection: activeConnection
+              ? { id: activeConnection.id, kind: activeConnection.kind, label: activeConnection.label }
+              : { kind: 'env-default' },
+          },
         });
       })();
     }
@@ -2452,7 +2674,7 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
 
   /** Mirror a completed turn into Vantage. Never awaited on the audio path. */
   function persistTurn(role: 'user' | 'assistant', text: string): void {
-    if (!text.trim() || !isVantageVoiceSessionConfigured()) return;
+    if (!text.trim() || !(activeVantageKey || process.env.VANTAGE_AGENT_KEY)) return;
     void ensureVantageVoiceSession()
       .then(() => recordTurn(vantageVoiceSession, role, text))
       .catch((err) => console.warn('[VantageVoiceSession] persistTurn failed:', err?.message || err));
@@ -2468,35 +2690,89 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
    */
   async function bridgeToAgent(backend: string, agentKey: string, text: string): Promise<string> {
     if (backend === 'omokoda2') {
-      // Real Omo-Koda2 kernel persona -- its own birthed identity/tools,
-      // not a Vantage relay. No agentKey param here; the kernel agent's
-      // own X-Agent-Id/-Key are held internally by omokoda2.ts.
-      const reply = await bridgeOmokoda2(text);
-      void offloadTurnToVault(hermesGatewaySessionKey, text, reply);
+      // Real Omo-Koda2 kernel persona — the citizen path. Per-connection
+      // kernel URL + birth credentials when the user connected their own
+      // agent; otherwise the app's guest persona (env default path).
+      const opts = activeOmokoda2Cfg
+        ? {
+            kernelUrl: activeOmokoda2Cfg.kernelUrl,
+            agentId: activeOmokoda2Cfg.agentId,
+            agentKey: activeOmokoda2Cfg.agentKey,
+            agentName: activeOmokoda2Cfg.agentName,
+          }
+        : undefined;
+      const reply = await bridgeOmokoda2(text, opts);
+      void offloadTurnToVault(hermesGatewaySessionKey, text, reply, activeVaultKey);
       persistTurn('user', text);
       persistTurn('assistant', reply);
       return reply;
     }
-    if (backend === 'hermes_contabo' && HERMES_CONTABO_GATEWAY_KEY) {
+    if (backend === 'hermes_contabo' && (activeHermesGateway?.key || HERMES_CONTABO_GATEWAY_KEY)) {
       try {
-        const result = await callHermesGatewaySession(hermesGatewaySessionKey, text);
+        const gw = activeHermesGateway || { url: HERMES_CONTABO_GATEWAY_URL, key: HERMES_CONTABO_GATEWAY_KEY, model: HERMES_GATEWAY_MODEL };
+        const result = await callHermesGatewaySession(hermesGatewaySessionKey, text, gw.url, gw.key);
         console.log(
           `[HermesGateway] session=${hermesGatewaySessionKey} tool_calls=${result.toolCalls} reply_len=${result.reply.length}`
         );
-        // Vault offload: push this turn (user utterance + agent reply) into
-        // the agent's Vantage memory vault via the ingest-only connector, so
-        // every conversation is durably stored and searchable there — Vantage
-        // is the memory system; the Hermes session is the working context.
-        void offloadTurnToVault(hermesGatewaySessionKey, text, result.reply);
-        // Same exchange, recorded as a first-class Vantage voice session turn.
-        // The vault offload above is the memory-note view of it; this is the
-        // session/transcript view the dashboard and transcript search read.
+        void offloadTurnToVault(hermesGatewaySessionKey, text, result.reply, activeVaultKey);
         persistTurn('user', text);
         persistTurn('assistant', result.reply);
         return result.reply;
       } catch (err: any) {
         console.warn('[HermesGateway] falling back to Vantage relay:', err?.message || err);
       }
+    }
+    if ((backend === 'openai' || backend === 'open_claw') && activeOpenAiCompat?.baseUrl) {
+      // Visitor path: generic OpenAI-compatible endpoint, with Vantage MCP
+      // tools injected when this connection holds a Vantage X-Agent-Key.
+      // Money-moving tools stay behind the same owner-unlock gate as the
+      // native path: an unexecuted tool call is reported, never dropped.
+      const client = new OpenAiCompatClient({
+        baseUrl: activeOpenAiCompat.baseUrl,
+        apiKey: activeOpenAiCompat.apiKey,
+        model: activeOpenAiCompat.model,
+      });
+      const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+        {
+          role: 'system',
+          content:
+            'You are speaking through Vantage-Voice. Answer naturally and concisely for spoken voice; no markdown. ' +
+            (activeVantageKey
+              ? 'You have Vantage platform tools available as function calls — use them for real data and real actions when the user asks.'
+              : ''),
+        },
+        { role: 'user', content: text },
+      ];
+      const pendingToolCalls: string[] = [];
+      const first = await client.streamTurn(messages, {
+        tools: activeVantageKey ? vantageOpenAiTools() : undefined,
+        onToolCall: (name) => pendingToolCalls.push(name),
+      });
+      if (first.reply.trim()) {
+        void offloadTurnToVault(hermesGatewaySessionKey, text, first.reply, activeVaultKey);
+        persistTurn('user', text);
+        persistTurn('assistant', first.reply);
+        return first.reply;
+      }
+      // Endpoint answered with tool calls instead of text: execute them
+      // (gated), feed the results back for a final spoken answer.
+      const toolMessages = messages.slice();
+      for (const toolName of pendingToolCalls.slice(0, 4)) {
+        try {
+          const content = await callVantageToolFor(activeVantageKey, toolName, {});
+          toolMessages.push({ role: 'assistant', content: `[tool call ${toolName} requested]` });
+          toolMessages.push({ role: 'user', content: `[tool ${toolName} result] ${JSON.stringify(content).slice(0, 4000)}` });
+        } catch (err: any) {
+          toolMessages.push({ role: 'assistant', content: `[tool call ${toolName} requested]` });
+          toolMessages.push({ role: 'user', content: `[tool ${toolName} error] ${err?.message || err}` });
+        }
+      }
+      const second = await client.streamTurn(toolMessages, { tools: undefined });
+      const final = second.reply.trim() || 'I tried to use my tools but got no final answer.';
+      void offloadTurnToVault(hermesGatewaySessionKey, text, final, activeVaultKey);
+      persistTurn('user', text);
+      persistTurn('assistant', final);
+      return final;
     }
     return callVantageAgentBridge(agentKey, text);
   }
@@ -2696,11 +2972,13 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
         // Tool Router meta-tools total, unlike Vantage's 663 which need
         // the indirect search/call pattern) -- built per-session since
         // discovery can complete after this module first loaded, or after
-        // a new OAuth connection adds a toolkit mid-runtime.
+        // a new OAuth connection adds a toolkit mid-runtime. Vantage MCP
+        // declarations are built for THIS session's connection key, so a
+        // visitor agent sees exactly the tools its key is authorized for.
         const composioDeclarations = buildGeminiDeclarationsForComposioTools();
-        sessionConfig.tools = composioDeclarations.length > 0
-          ? [{ functionDeclarations: [...liveTools[0].functionDeclarations, ...composioDeclarations] }]
-          : liveTools;
+        const vantageDecls = buildDeclarationsFor(activeVantageKey);
+        const combined = [...liveTools[0].functionDeclarations, ...vantageDecls, ...composioDeclarations];
+        sessionConfig.tools = combined.length > 0 ? [{ functionDeclarations: combined }] : liveTools;
       }
 
       liveSession = await client.live.connect({
@@ -3015,6 +3293,7 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
                     const result = await executeToolCall(call.name, call.args, {
                       ownerUnlocked,
                       unlockOwner: () => { ownerUnlocked = true; },
+                      vantageAgentKey: activeVantageKey,
                       applySettingOnClient: (setting, value) => {
                         sendToClient(clientWs, { type: 'apply_setting', toolName: setting, text: value });
                       },
@@ -3118,22 +3397,29 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
 
       if (msg.type === 'config') {
         const config = msg.config || {};
-        const framework = config.agentFramework || 'native';
+        // Resolve this session's agent connection BEFORE choosing the engine:
+        // an explicit connectionId wins, then the user's active connection,
+        // then server-wide env defaults.
+        applyConnectionConfig(config);
+        const configuredFramework = config.agentFramework || 'native';
+        const framework = activeConnection
+          ? backendForConnection(activeConnection.kind)
+          : configuredFramework;
         // Item C: the cascade is the DEFAULT voice engine for the
-        // hermes_contabo persona, and the C4 fallback whenever Gemini keys
+        // hermes_contabo persona, the omokoda2 citizen path, the visitor
+        // OpenAI/OpenClaw bridges, and the C4 fallback whenever Gemini keys
         // are absent — so the app speaks even with zero Gemini dependency.
         const geminiOk = getAiClient().hasKey;
-        // omokoda2 has no Gemini Live text-injection path wired (Phase 1
-        // is voice I/O only) -- always cascade for it, same as hermes_contabo.
-        const useCascade = framework === 'hermes_contabo' || framework === 'omokoda2' || !geminiOk;
+        const useCascade = framework === 'hermes_contabo' || framework === 'omokoda2'
+          || framework === 'openai' || framework === 'open_claw' || !geminiOk;
         if (useCascade) {
           if (framework !== 'hermes_contabo' && framework !== 'omokoda2' && !geminiOk) {
             console.warn(`[Cascade] No Gemini API key — using cascade voice engine for backend=${framework} (C4 fallback)`);
           }
-          startCascadeEngine(config);
+          startCascadeEngine({ ...config, agentFramework: framework });
         } else {
           stopCascadeEngine();
-          await startGeminiSession(config);
+          await startGeminiSession({ ...config, agentFramework: framework });
         }
       } else if (msg.type === 'audio' && msg.audio) {
         if (cascadeActive && cascadeEngine) {

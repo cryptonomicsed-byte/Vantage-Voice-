@@ -124,10 +124,13 @@ export async function openVoiceSession(opts: {
   persona?: string;
   voice?: string;
   metadata?: Record<string, unknown>;
+  /** Per-connection Vantage X-Agent-Key. Falls back to env when absent. */
+  agentKey?: string;
 }): Promise<VoiceSessionHandle | null> {
-  if (!VANTAGE_AGENT_KEY) {
+  const agentKey = opts.agentKey || VANTAGE_AGENT_KEY;
+  if (!agentKey) {
     console.warn(
-      '[VantageVoiceSession] VANTAGE_AGENT_KEY is unset — this conversation will NOT be ' +
+      '[VantageVoiceSession] no Vantage agent key (env or connection) — this conversation will NOT be ' +
         'recorded on Vantage (no session, no transcript, no tool-call audit).'
     );
     return null;
@@ -135,7 +138,7 @@ export async function openVoiceSession(opts: {
   try {
     const res = await request('/api/agents/me/voice/sessions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Agent-Key': VANTAGE_AGENT_KEY },
+      headers: { 'Content-Type': 'application/json', 'X-Agent-Key': agentKey },
       body: JSON.stringify({
         engine: opts.engine || 'gemini_live',
         framework: opts.framework || 'native',
