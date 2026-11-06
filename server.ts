@@ -2758,6 +2758,15 @@ wss.on('connection', (clientWs: WebSocket, request?: any, uidFromClient: string 
       // (gated), feed the results back for a final spoken answer.
       const toolMessages = messages.slice();
       for (const toolName of pendingToolCalls.slice(0, 4)) {
+        // Money-moving tools require the owner unlock on THIS path too —
+        // callVantageToolFor below bypasses executeToolCall, so the gate
+        // must be applied explicitly here.
+        if (isMoneyMovingVantageToolFor(activeVantageKey, toolName) && !ownerUnlocked) {
+          auditOwnerAction('vantage_money_tool_blocked', { tool: toolName, path: 'openai_bridge' }, 'denied');
+          toolMessages.push({ role: 'assistant', content: `[tool call ${toolName} requested]` });
+          toolMessages.push({ role: 'user', content: `[tool ${toolName} blocked] owner confirmation required for money-moving actions. Tell the user to say their owner PIN to unlock.` });
+          continue;
+        }
         try {
           const content = await callVantageToolFor(activeVantageKey, toolName, {});
           toolMessages.push({ role: 'assistant', content: `[tool call ${toolName} requested]` });
